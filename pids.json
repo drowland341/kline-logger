@@ -1,0 +1,83 @@
+{
+  "_readme": [
+    "Channel definitions for kawasaki_logger.py. You can edit these in the app's Channels tab.",
+    "pid: hex local identifier sent as '21 <pid>'. every: read on every Nth update (1 = every time).",
+    "formula variables: A B C D... (data bytes), raw, sraw, n, d. Functions: abs min max round signed(v,bits) math.*",
+    "verified: set true once a channel's scaling has been checked against a known-good reading.",
+    "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session."
+  ],
+  "pids": [
+    {
+      "name": "Engine RPM",
+      "pid": "0x09",
+      "formula": "A*100 + B",
+      "units": "rpm",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "Formula from Kawasaki motorcycle KDS community lists. Not yet confirmed on a PWC ECU - check against Maptuner or a meter.",
+      "gauge_min": 0.0,
+      "gauge_max": 8000.0
+    },
+    {
+      "name": "Throttle sensor",
+      "pid": "0x04",
+      "formula": "A*256 + B",
+      "units": "raw",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "Raw counts. Sweep the throttle key-on/engine-off to find closed and WOT values.",
+      "gauge_min": null,
+      "gauge_max": null
+    },
+    {
+      "name": "Intake pressure",
+      "pid": "0x08",
+      "formula": "raw * 100 / 1024",
+      "units": "kPa",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "raw * 100 / 1024 is the SXR160's confirmed MAP axis scaling (1024 counts = 100 kPa). Check it key-on, engine off: the sensor sees outside air then, so it should read about 101 kPa near sea level. If not, use raw * 101.3 / (the key-on raw reading).",
+      "gauge_min": 0.0,
+      "gauge_max": 110.0
+    },
+    {
+      "name": "Engine temp",
+      "pid": "0x06",
+      "formula": "(A - 48) / 1.6 * 9 / 5 + 32",
+      "units": "°F",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Formula from Kawasaki motorcycle KDS community lists. Not yet confirmed on a PWC ECU - check against Maptuner or a meter.",
+      "gauge_min": 32.0,
+      "gauge_max": 220.0
+    },
+    {
+      "name": "Intake air temp",
+      "pid": "0x07",
+      "formula": "(A - 48) / 1.6 * 9 / 5 + 32",
+      "units": "°F",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Formula from Kawasaki motorcycle KDS community lists. Not yet confirmed on a PWC ECU - check against Maptuner or a meter.",
+      "gauge_min": 32.0,
+      "gauge_max": 160.0
+    },
+    {
+      "name": "Battery",
+      "pid": "0x0A",
+      "formula": "A / 12.75",
+      "units": "V",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "A / 12.75 maps the full byte to 0-20 V (255 counts = 20.0 V), per Kawasaki motorcycle KDS lists. Check key-on against a multimeter at the battery. Above about 15 V running means the regulator isn't regulating.",
+      "gauge_min": 0.0,
+      "gauge_max": 20.0
+    }
+  ]
+}
