@@ -6,6 +6,7 @@
     "verified: set true once a channel's scaling has been checked against a known-good reading.",
     "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session."
   ],
+  "defaults_revision": 1,
   "pids": [
     {
       "name": "Engine RPM",
@@ -72,7 +73,7 @@
       "pid": "0x0A",
       "formula": "raw / 12.75",
       "units": "V",
-      "enabled": true,
+      "enabled": false,
       "every": 10,
       "verified": false,
       "notes": "Switched off: PID 0x0A returned 00 00 on an Ultra LX with key on, so it isn't battery voltage there. Use the PID scanner to find the right one (look for a value that jumps up when the engine runs).",

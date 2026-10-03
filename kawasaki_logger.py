@@ -225,8 +225,10 @@ class App(ctk.CTk if ctk else object):
         self.temp_unit = "C" if str(self.settings.get("temp_unit", "F")).upper() == "C" else "F"
         self.last_values: dict = {}
         problems = []
+        self.channels_revision = kl.DEFAULTS_REVISION
         try:
             self.pids, problems = kl.load_pids(PIDS_PATH)
+            self.channels_revision = kl.pids_revision(PIDS_PATH)
         except (OSError, ValueError) as e:
             messagebox.showerror("Channel file problem",
                                  f"Could not read pids.json:\n{e}\n\nUsing the built-in channels instead.")
@@ -277,6 +279,7 @@ class App(ctk.CTk if ctk else object):
         self.after(200, self._chart_tick)
         self.after(500, self._log_tick)
         self.after(2000, self._port_watch)
+        self.after(900, self._check_channel_defaults)
 
     # ------------------------------------------------------------ helpers
     def _scaling(self) -> float:
@@ -670,6 +673,10 @@ class App(ctk.CTk if ctk else object):
             self._button(btns, text, cmd, width=w).pack(side="left", padx=(0, 8))
         self._button(btns, "Remove", self._remove_channel, "danger", width=90).pack(side="left")
         self._button(btns, "Reload pids.json", self._reload_channels, width=140).pack(side="right")
+        reset_btn = self._button(btns, "Reset to defaults", self._reset_channels, "danger", width=150)
+        reset_btn.pack(side="right", padx=(0, 8))
+        Tooltip(reset_btn, "Replace the whole channel list with the built-in defaults. Use this after updating "
+                           "the app so you get the newest scalings.")
         return page
 
     def _refresh_channel_list(self):
@@ -1202,7 +1209,7 @@ class App(ctk.CTk if ctk else object):
     def _channels_changed(self, select=None, save=True):
         if save:
             try:
-                kl.save_pids(PIDS_PATH, self.pids)
+                kl.save_pids(PIDS_PATH, self.pids, self.channels_revision)
             except OSError as e:
                 messagebox.showerror("Could not save", f"pids.json could not be written:\n{e}")
         self.history.clear()
@@ -1263,6 +1270,42 @@ class App(ctk.CTk if ctk else object):
             del self.pids[i]
             self._channels_changed()
 
+    def _reset_channels(self):
+        if not self._can_edit_channels():
+            return
+        if not messagebox.askyesno(
+                "Reset channels",
+                "Replace ALL channels with the built-in defaults?\n\n"
+                "This removes any channels you added and any edits or calibration you made, such as the throttle "
+                "end points. Your cable, units and other settings are kept."):
+            return
+        self._apply_default_channels()
+
+    def _apply_default_channels(self):
+        self.pids = [p.copy() for p in kl.DEFAULT_PIDS]
+        self.channels_revision = kl.DEFAULTS_REVISION
+        self._channels_changed()
+        self._status("Channels reset to the defaults.", "ok")
+
+    def _check_channel_defaults(self):
+        """After an update, offer the new default channels once if the saved list is older."""
+        if self.channels_revision >= kl.DEFAULTS_REVISION:
+            return
+        yes = messagebox.askyesno(
+            "New default channels",
+            f"This version has updated default channels: {kl.DEFAULTS_NOTE}.\n\n"
+            "Replace your channel list with the new defaults?\n\n"
+            "Choose Yes unless you added channels or calibrated the throttle yourself. Choose No to keep "
+            "your list; you can still reset any time from the Channels page.", parent=self)
+        if yes:
+            self._apply_default_channels()
+        else:
+            self.channels_revision = kl.DEFAULTS_REVISION          # remember the answer; ask again next time
+            try:
+                kl.save_pids(PIDS_PATH, self.pids, self.channels_revision)
+            except OSError:
+                pass
+
     def _reload_channels(self):
         if not self._can_edit_channels():
             return
@@ -1272,6 +1315,7 @@ class App(ctk.CTk if ctk else object):
             messagebox.showerror("Channel file problem", f"Could not read pids.json:\n{e}")
             return
         self.pids = pids
+        self.channels_revision = kl.pids_revision(PIDS_PATH)
         self._channels_changed(save=False)
         if problems:
             messagebox.showwarning("Some channels were skipped", "\n".join(problems))

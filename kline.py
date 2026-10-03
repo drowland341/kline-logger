@@ -348,6 +348,12 @@ DEFAULT_PIDS = [
            0, 20),
 ]
 
+# Raise DEFAULTS_REVISION whenever the built-in channels change in a way users should pick up. The app
+# compares it with the number saved in the user's pids.json and offers to reset once if theirs is older.
+DEFAULTS_REVISION = 1
+DEFAULTS_NOTE = ("corrected readings for the Ultra LX, temperatures that follow the \u00b0F / \u00b0C switch, "
+                 "and the throttle shown as 0 to 100 %")
+
 PIDS_README = [
     "Channel definitions for kawasaki_logger.py. You can edit these in the app's Channels tab.",
     "pid: hex local identifier sent as '21 <pid>'. every: read on every Nth update (1 = every time).",
@@ -357,10 +363,28 @@ PIDS_README = [
 ]
 
 
-def save_pids(path: str, pids) -> None:
+def save_pids(path: str, pids, revision=None) -> None:
+    """revision=None stamps the file with the current defaults revision (use for fresh default lists)."""
+    rev = DEFAULTS_REVISION if revision is None else int(revision)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"_readme": PIDS_README, "pids": [p.to_dict() for p in pids]},
+        json.dump({"_readme": PIDS_README, "defaults_revision": rev, "pids": [p.to_dict() for p in pids]},
                   f, indent=2, ensure_ascii=False)
+
+
+def pids_revision(path: str) -> int:
+    """Defaults revision stamped in a channel file: 0 for older files that have no stamp.
+    An unreadable file counts as current, so it never triggers the reset offer."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return DEFAULTS_REVISION
+    if not isinstance(doc, dict):
+        return 0
+    try:
+        return int(doc.get("defaults_revision", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def load_pids(path: str):
