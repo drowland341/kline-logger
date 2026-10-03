@@ -2,7 +2,7 @@
 ; Build with build_windows.bat, or open this file in Inno Setup 6 and press Compile.
 
 #define AppName "K-line Logger"
-#define AppVersion "1.1.0"
+#define AppVersion "1.1.1"
 #define AppPublisher "Rowland Restorations"
 #define AppExe "KlineLogger.exe"
 
