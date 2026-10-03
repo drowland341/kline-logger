@@ -28,6 +28,12 @@ import time
 import traceback
 from datetime import datetime
 
+try:
+    from serial import SerialException as PortError      # raised when the USB serial port itself fails
+except ImportError:
+    class PortError(Exception):                           # pyserial missing: only the demo works
+        pass
+
 DEMO_PORT = "DEMO"
 
 SID_START_COMM = 0x81
@@ -66,6 +72,7 @@ DEFAULT_SETTINGS = {
     "log_dir": "logs",
     "log_raw_columns": True,
     "run_name": "ski",
+    "temp_unit": "F",                # F or C: how temperature channels are displayed and logged
     "advanced": True,                # show PID scanner, console and raw bytes in the GUI
 }
 
@@ -292,6 +299,20 @@ class PidDef:
     def copy(self) -> "PidDef":
         return PidDef.from_dict(self.to_dict())
 
+    @property
+    def is_temp(self) -> bool:
+        """Channels with units of degrees C (formula gives C) can be shown in C or F."""
+        return self.units.strip().lower() == "\u00b0c"
+
+    def units_for(self, unit: str) -> str:
+        return "\u00b0F" if self.is_temp and unit == "F" else self.units
+
+    def convert(self, value, unit: str):
+        """Value in the channel's own units -> value in the chosen display unit (F or C)."""
+        if value is None:
+            return None
+        return value * 9 / 5 + 32 if self.is_temp and unit == "F" else value
+
     def decode(self, data: bytes) -> float:
         env = dict(FORMULA_FUNCS)
         for i, letter in enumerate("ABCDEFGH"):
@@ -302,24 +323,29 @@ class PidDef:
         return float(eval(self._code, {"__builtins__": {}}, env))  # local tool, user-written formulas
 
 
-MOTO_NOTE = ("Formula from Kawasaki motorcycle KDS community lists. "
-             "Not yet confirmed on a PWC ECU - check against Maptuner or a meter.")
-
-PRESSURE_NOTE = ("raw * 100 / 1024 is the SXR160's confirmed MAP axis scaling (1024 counts = 100 kPa). "
-                 "Check it key-on, engine off: the sensor sees outside air then, so it should read about "
-                 "101 kPa near sea level. If not, use raw * 101.3 / (the key-on raw reading).")
+ULX_NOTE = "Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski."
 
 DEFAULT_PIDS = [
-    PidDef("Engine RPM", 0x09, "A*100 + B", "rpm", True, 1, False, MOTO_NOTE, 0, 8000),
-    PidDef("Throttle sensor", 0x04, "A*256 + B", "raw", True, 1, False,
-           "Raw counts. Sweep the throttle key-on/engine-off to find closed and WOT values."),
-    PidDef("Intake pressure", 0x08, "raw * 100 / 1024", "kPa", True, 1, False, PRESSURE_NOTE, 0, 110),
-    PidDef("Engine temp", 0x06, "(A - 48) / 1.6 * 9 / 5 + 32", "°F", True, 10, False, MOTO_NOTE, 32, 220),
-    PidDef("Intake air temp", 0x07, "(A - 48) / 1.6 * 9 / 5 + 32", "°F", True, 10, False, MOTO_NOTE, 32, 160),
-    PidDef("Battery", 0x0A, "A / 12.75", "V", True, 10, False,
-           "A / 12.75 maps the full byte to 0-20 V (255 counts = 20.0 V), per Kawasaki motorcycle KDS lists. "
-           "Check key-on against a multimeter at the battery. Above about 15 V running means the regulator "
-           "isn't regulating.", 0, 20),
+    PidDef("Engine RPM", 0x09, "raw", "rpm", True, 1, False,
+           "Assumes the 16-bit value is rpm. Not checked yet: it reads 00 00 with the engine off. At idle, "
+           "compare with the ski's tach and note the raw hex.", 0, 8000),
+    PidDef("Throttle sensor", 0x04, "max(0, min(100, (raw - 246) * 100 / (912 - 246)))", "%", True, 1, False,
+           "Ultra LX: closed = 246 and wide open = 912 counts (about 1.2 V and 4.5 V if 10-bit at 5 V). "
+           "Use Capture 0 % / 100 % in Edit to set your own ski's values.", 0, 100),
+    PidDef("Intake pressure", 0x08, "raw * 0.124", "kPa", True, 1, False,
+           "The PID returns counts, not kPa: 817 counts at key-on is about 101 kPa (3.99 V if 10-bit at 5 V). "
+           "0.124 kPa per count makes key-on read ambient. Check idle vacuum (about 35-45 kPa). The ECU's own "
+           "sensor curve would give the exact slope.", 0, 110),
+    PidDef("Engine temp", 0x06, "raw - 40", "°C", True, 10, False,
+           "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an "
+           "infrared thermometer once it's warm. Units of C make it switchable between C and F. "
+           + ULX_NOTE, 0, 105),
+    PidDef("Intake air temp", 0x07, "raw - 40", "°C", True, 10, False,
+           "Same encoding as engine temp. " + ULX_NOTE, 0, 70),
+    PidDef("Battery", 0x0A, "raw / 12.75", "V", False, 10, False,
+           "Switched off: PID 0x0A returned 00 00 on an Ultra LX with key on, so it isn't battery voltage there. "
+           "Use the PID scanner to find the right one (look for a value that jumps up when the engine runs).",
+           0, 20),
 ]
 
 PIDS_README = [
@@ -585,8 +611,10 @@ class KLine:
 # --------------------------------------------------------------------------
 
 class CsvLog:
-    def __init__(self, path: str, pids, include_raw: bool = True):
+    def __init__(self, path: str, pids, include_raw: bool = True, temp_unit: str = "F"):
         self.path = path
+        self.pids = pids
+        self.unit = temp_unit
         self.cols = [i for i, d in enumerate(pids) if d.enabled]
         self.include_raw = include_raw
         folder = os.path.dirname(path)
@@ -595,7 +623,7 @@ class CsvLog:
         self.f = open(path, "w", newline="", encoding="utf-8")
         self.w = csv.writer(self.f)
         head = ["time", "elapsed_s", "marker"]
-        head += [f"{pids[i].name} [{pids[i].units}]" for i in self.cols]
+        head += [f"{pids[i].name} [{pids[i].units_for(temp_unit)}]" for i in self.cols]
         if include_raw:
             head += [f"{pids[i].name} raw (PID 0x{pids[i].pid:02X})" for i in self.cols]
         self.w.writerow(head)
@@ -606,7 +634,7 @@ class CsvLog:
     def row(self, values: dict, marker: str = "") -> None:
         now = time.time()
         r = [datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3], f"{now - self.t0:.3f}", marker]
-        r += [fmt_num(values.get(i, (None, "", None))[0]) for i in self.cols]
+        r += [fmt_num(self.pids[i].convert(values.get(i, (None, "", None))[0], self.unit)) for i in self.cols]
         if self.include_raw:
             r += [values.get(i, (None, "", None))[1] for i in self.cols]
         self.w.writerow(r)
@@ -645,6 +673,10 @@ class Engine(threading.Thread):
         self.watch_list: list[int] = []
         self.watch_pos = 0
         self.fail = 0
+        self.settings: dict = {}
+        self.reopen = False                # True while waiting for a lost USB cable to come back
+        self.next_reopen = 0.0
+        self._err_last = ("", 0.0)         # for rate-limiting repeated internal errors
         self._reset_poll()
 
     # --- plumbing ---------------------------------------------------------
@@ -661,7 +693,10 @@ class Engine(threading.Thread):
                 if not self.running:
                     break
                 if self.link is None:
-                    time.sleep(0.05)
+                    if self.reopen:
+                        self._try_reopen()
+                    else:
+                        time.sleep(0.05)
                 elif not self.session_ok:
                     self._try_session()
                 elif self.mode == "scan":
@@ -672,11 +707,21 @@ class Engine(threading.Thread):
                     self._poll_step()
             except LinkLost as e:
                 self._lost(str(e))
+            except PortError as e:              # the USB serial port failed (unplugged, reset, lost power)
+                self._cable_lost(e)
             except Exception as e:  # keep the worker alive no matter what
-                self.emit("status", f"Internal error: {e!r}", "bad")
-                self.emit("console", traceback.format_exc())
-                time.sleep(0.2)
+                self._internal_error(e)
         self._shutdown()
+
+    def _internal_error(self, e: Exception) -> None:
+        """Report an unexpected error, but never more than once per 5 s for the same one."""
+        text, last = self._err_last
+        now = time.perf_counter()
+        if repr(e) != text or now - last > 5.0:
+            self.emit("status", f"Internal error: {e!r}", "bad")
+            self.emit("console", traceback.format_exc())
+            self._err_last = (repr(e), now)
+        time.sleep(0.2)
 
     def _commands(self) -> None:
         while True:
@@ -696,6 +741,7 @@ class Engine(threading.Thread):
     # --- commands from the GUI -------------------------------------------
     def _cmd_connect(self, settings: dict, pids) -> None:
         self._close_link()
+        self.settings = dict(settings)
         self.pids = pids
         self._reset_poll()
         link = KLine(settings, traffic=self._traffic)
@@ -719,10 +765,10 @@ class Engine(threading.Thread):
         self.pids = pids
         self._reset_poll()
 
-    def _cmd_start_log(self, path: str, include_raw: bool) -> None:
+    def _cmd_start_log(self, path: str, include_raw: bool, temp_unit: str = "F") -> None:
         self._cmd_stop_log()
         try:
-            self.log = CsvLog(path, self.pids, include_raw)
+            self.log = CsvLog(path, self.pids, include_raw, temp_unit)
         except OSError as e:
             self.log = None
             self.emit("status", f"Could not create the log file: {e}", "bad")
@@ -785,14 +831,53 @@ class Engine(threading.Thread):
 
     # --- link state -------------------------------------------------------
     def _close_link(self) -> None:
+        self.reopen = False
         if self.link:
             if self.session_ok:
-                self.link.stop()
+                try:
+                    self.link.stop()
+                except Exception:               # a dead port can't say goodbye
+                    pass
             self.link.close()
         self.link = None
         self.session_ok = False
         self.scan_list, self.watch_list = [], []
         self.mode = "poll"
+
+    def _cable_lost(self, err: Exception) -> None:
+        port = self.settings.get("port", "the cable")
+        if self.link:
+            self.link.close()
+        self.link = None
+        self.session_ok = False
+        self.fail = 0
+        self.plan = []
+        self.scan_list, self.watch_list = [], []
+        self.mode = "poll"
+        self.reopen = True
+        self.next_reopen = time.perf_counter() + 1.0
+        if self.log:
+            self._cmd_marker("cable lost")
+        self.emit("console", f"Port error on {port}: {err}")
+        self.emit("state", "waiting",
+                  f"Lost the USB cable on {port}. Plug it back in and the logger reconnects by itself. "
+                  "If Windows gave it a new COM number, press Disconnect and pick it again.")
+
+    def _try_reopen(self) -> None:
+        if time.perf_counter() < self.next_reopen:
+            time.sleep(0.05)
+            return
+        link = KLine(self.settings, traffic=self._traffic)
+        try:
+            link.open()
+        except (KLineError, PortError, OSError):
+            self.next_reopen = time.perf_counter() + 1.0      # still gone; keep trying quietly
+            return
+        self.link = link
+        self.reopen = False
+        self.session_ok = False
+        self.next_retry = 0.0
+        self.emit("state", "connecting", "Cable is back. Waking the ECU...")
 
     def _try_session(self) -> None:
         if time.perf_counter() < self.next_retry:
@@ -803,7 +888,8 @@ class Engine(threading.Thread):
         except KLineError as e:
             self.next_retry = time.perf_counter() + self.RETRY_SECONDS
             self.emit("state", "waiting",
-                      f"No answer from the ECU yet, still trying. Key on / press start. ({e})")
+                      "No answer from the ECU yet, still trying. If the ski shut itself off, take the key out "
+                      f"and put it back in. ({e})")
             return
         self.session_ok = True
         self.fail = 0
@@ -820,7 +906,8 @@ class Engine(threading.Thread):
         self.fail = 0
         self.plan = []
         self.next_retry = time.perf_counter() + 0.5
-        self.emit("state", "waiting", f"Lost contact with the ECU ({reason}). Reconnecting...")
+        self.emit("state", "waiting", f"Lost contact with the ECU ({reason}). Reconnecting... "
+                                      "If the ski shut itself off, take the key out and put it back in.")
 
     def _problem(self, err: Exception) -> None:
         self.fail += 1
@@ -970,19 +1057,18 @@ class EngineSim:
             return None
         rpm, tps, ect_c, iat_c = self._state()
         if pid == 0x09:
-            r = int(rpm)
-            return bytes([r // 100, r % 100])
+            return int(rpm).to_bytes(2, "big")
         if pid == 0x04:
-            return int(205 + tps / 100 * 690).to_bytes(2, "big")
+            return int(246 + tps / 100 * 666).to_bytes(2, "big")
         if pid == 0x08:
             kpa = 40 + 57 * tps / 100 + 0.4 * math.sin(time.perf_counter() * 7)   # ~40 kPa idle, ~97 WOT
-            return int(round(kpa * 10.24)).to_bytes(2, "big")
+            return int(round(kpa / 0.124)).to_bytes(2, "big")
         if pid == 0x06:
-            return bytes([int(round(ect_c * 1.6 + 48))])
+            return int(round(ect_c + 40)).to_bytes(2, "big")
         if pid == 0x07:
-            return bytes([int(round(iat_c * 1.6 + 48))])
+            return int(round(iat_c + 40)).to_bytes(2, "big")
         if pid == 0x05:
-            return int(round(101.3 * 10.24)).to_bytes(2, "big")
+            return int(round(101.3 / 0.124)).to_bytes(2, "big")
         if pid == 0x0A:
             volts = 14.1 if rpm > 2000 else 13.2                       # charging above idle
             return bytes([int(round(volts * 12.75))])

@@ -222,6 +222,8 @@ class App(ctk.CTk if ctk else object):
         self._fonts: dict = {}
 
         self.settings = kl.load_settings(SETTINGS_PATH)
+        self.temp_unit = "C" if str(self.settings.get("temp_unit", "F")).upper() == "C" else "F"
+        self.last_values: dict = {}
         problems = []
         try:
             self.pids, problems = kl.load_pids(PIDS_PATH)
@@ -249,6 +251,7 @@ class App(ctk.CTk if ctk else object):
         self.scan_rows: dict = {}
         self.scan_total = 0
         self.scan_count = 0
+        self.scan_sort = ("pid", False)
         self.chart_dirty = True
         self.ports: list = []
         self.pages: dict = {}
@@ -477,6 +480,18 @@ class App(ctk.CTk if ctk else object):
         self.rate_lbl = ctk.CTkLabel(bar, text="", font=self.f(12), text_color=C["muted"],
                                      fg_color="transparent", corner_radius=13, height=26)
         self.rate_lbl.pack(side="right")
+        self.temp_seg = ctk.CTkSegmentedButton(
+            bar, values=["\u00b0F", "\u00b0C"], command=self._set_temp_unit, width=96, height=32,
+            corner_radius=8, font=self.f(12, "bold"), fg_color=C["chip"], selected_color=C["accent"],
+            selected_hover_color=C["accent_hover"], unselected_color=C["chip"],
+            unselected_hover_color=C["chip_hover"], text_color=C["ink"])
+        self.temp_seg.pack(side="right", padx=(0, 10))
+        self.temp_seg.set(f"\u00b0{self.temp_unit}")
+        # Segmented buttons don't allow event bindings, so the hover hint goes on a label beside it.
+        temp_lbl = ctk.CTkLabel(bar, text="Temp", font=self.f(12), text_color=C["muted"])
+        temp_lbl.pack(side="right", padx=(0, 6))
+        Tooltip(temp_lbl, "Show temperatures in \u00b0F or \u00b0C. Locked while a log is recording, "
+                          "so one log file never mixes units.")
 
         self.log_lbl = ctk.CTkLabel(page, text=LOG_HINT, font=self.f(12), text_color=C["muted"], anchor="w")
         self.log_lbl.pack(fill="x", padx=6, pady=(8, 2))
@@ -551,7 +566,7 @@ class App(ctk.CTk if ctk else object):
         val = ctk.CTkLabel(value_row, text="--", font=self.f(32, "bold"), text_color=C["stale"], height=46,
                            cursor="hand2")
         val.pack(side="left")
-        unit = ctk.CTkLabel(value_row, text="" if p.units == "raw" else p.units, font=self.f(14),
+        unit = ctk.CTkLabel(value_row, text=self._unit_text(p), font=self.f(14),
                             text_color=C["muted"], cursor="hand2")
         unit.pack(side="left", padx=(8, 0), pady=(10, 0))
         bar = ctk.CTkProgressBar(frame, height=8, corner_radius=4, fg_color=C["track"],
@@ -564,7 +579,7 @@ class App(ctk.CTk if ctk else object):
         for w in (frame, head, name, value_row, val, unit, sub):
             w.bind("<Button-1>", lambda e, i=i: self._toggle_chart(i), add="+")
         self.tiles[i] = {"frame": frame, "val": val, "sub": sub, "bar": bar, "chart_btn": chart_btn,
-                         "range": [None, None], "cache": {}}
+                         "unit": unit, "range": [None, None], "cache": {}}
 
     def _set(self, tile: dict, key: str, **kw):
         """Configure a tile widget only when something changed; CustomTkinter redraws on every configure."""
@@ -676,9 +691,9 @@ class App(ctk.CTk if ctk else object):
     def _build_scanner(self, parent):
         page = ctk.CTkFrame(parent, fg_color="transparent")
         self._page_title(page, "PID scanner",
-                         "Scan asks the ECU for every PID in the range. Then press Watch and move the throttle or "
-                         "rev the engine: rows that flash and count up are live sensors. Select rows and add them "
-                         "as channels to name and scale them.")
+                         "Scan asks the ECU for every PID in the range. To find a sensor: select a few rows (or none "
+                         "for all), press Watch, change what that sensor measures, then click the Swing heading to put "
+                         "the biggest movers first. Add the one you want as a channel to name and scale it.")
         bar = ctk.CTkFrame(page, fg_color="transparent")
         bar.pack(fill="x", padx=6)
         ctk.CTkLabel(bar, text="From", font=self.f(13), text_color=C["muted"]).pack(side="left", padx=(0, 6))
@@ -691,7 +706,10 @@ class App(ctk.CTk if ctk else object):
             if var is self.scan_from:
                 ctk.CTkLabel(bar, text="to", font=self.f(13), text_color=C["muted"]).pack(side="left", padx=(0, 6))
         self._button(bar, "Scan", self._scan, "primary", width=90).pack(side="left")
-        self._button(bar, "Watch", self._watch, width=90).pack(side="left", padx=(8, 0))
+        watch_btn = self._button(bar, "Watch", self._watch, width=90)
+        watch_btn.pack(side="left", padx=(8, 0))
+        Tooltip(watch_btn, "Re-read the selected rows over and over (or every PID that answered, if none are "
+                           "selected) and track how far each one moves. Fewer rows means faster readings.")
         self._button(bar, "Stop", lambda: self.engine.send("stop_scan"), width=80).pack(side="left", padx=(8, 0))
         self._button(bar, "Save results", self._save_scan, width=120).pack(side="right")
         self._button(bar, "Add selected as channels", self._scan_to_channels, width=200).pack(
@@ -706,10 +724,12 @@ class App(ctk.CTk if ctk else object):
                       offvalue=False, command=self._refill_scan_tree, font=self.f(12), text_color=C["ink"],
                       progress_color=C["accent"]).pack(side="right")
 
-        cols = ("pid", "result", "bytes", "data", "changes")
-        heads = ("PID", "Result", "Bytes", "Data (hex)", "Changes seen")
-        widths = (70, 280, 60, 260, 110)
+        cols = ("pid", "result", "bytes", "data", "value", "low", "high", "swing", "changes")
+        heads = ("PID", "Result", "Bytes", "Data (hex)", "Value", "Low", "High", "Swing", "Changes")
+        widths = (70, 170, 60, 150, 90, 90, 90, 80, 90)
         card, self.scan_tree = self._tree_card(page, cols, heads, widths, "extended")
+        for c, h in zip(cols, heads):              # click a heading to sort by it
+            self.scan_tree.heading(c, text=h, anchor="w", command=lambda c=c: self._sort_scan(c))
         card.pack(fill="both", expand=True, padx=6)
         return page
 
@@ -923,6 +943,7 @@ class App(ctk.CTk if ctk else object):
         for t in self.tiles.values():
             t["range"] = [None, None]
         self.history.clear()
+        self.last_values.clear()
         self.chart_markers.clear()
         self.engine.send("connect", dict(self.settings), [p.copy() for p in self.pids])
         self._set_state("connecting", "Opening the port...")
@@ -969,7 +990,7 @@ class App(ctk.CTk if ctk else object):
         self._write_settings()
         path = os.path.join(self._log_dir(), f"{datetime.now():%Y-%m-%d_%H-%M-%S}_{name}.csv")
         self.marker_count = 0
-        self.engine.send("start_log", path, bool(self.settings.get("log_raw_columns", True)))
+        self.engine.send("start_log", path, bool(self.settings.get("log_raw_columns", True)), self.temp_unit)
 
     def _on_log(self, active, path, rows):
         if active:
@@ -1010,9 +1031,58 @@ class App(ctk.CTk if ctk else object):
         self._status(f"Marker {label} added to the log.", "ok")
 
     # ------------------------------------------------------------ live values
+    def _unit_text(self, p) -> str:
+        u = p.units_for(self.temp_unit)
+        return "" if u == "raw" else u
+
+    def _set_temp_unit(self, value: str):
+        unit = "C" if "C" in value else "F"
+        if unit == self.temp_unit:
+            return
+        if self.logging_path:
+            self.temp_seg.set(f"\u00b0{self.temp_unit}")
+            self._status("Stop logging before changing temperature units, so the log's units stay the same.", "warn")
+            return
+        self.temp_unit = unit
+        self.settings["temp_unit"] = unit
+        self._write_settings()
+        for i, t in self.tiles.items():
+            self._set(t, "unit", text=self._unit_text(self.pids[i]))
+            self._render_tile(i)
+        self._mark_chart()
+        self._status(f"Temperatures now shown in \u00b0{unit}.", "ok")
+
+    def _render_tile(self, i: int):
+        t = self.tiles.get(i)
+        if t is None or i not in self.last_values or i >= len(self.pids):
+            return
+        val, rawhex, err = self.last_values[i]
+        p = self.pids[i]
+        if val is None:
+            self._set(t, "val", text="--", text_color=C["stale"])
+            self._set(t, "sub", text=(err or "No data")[:70], text_color=C["bad"])
+            return
+        rng = t["range"]                     # low/high are kept in the channel's own units
+        rng[0] = val if rng[0] is None else min(rng[0], val)
+        rng[1] = val if rng[1] is None else max(rng[1], val)
+        lo = p.gauge_min if p.gauge_min is not None else rng[0]
+        hi = p.gauge_max if p.gauge_max is not None else rng[1]
+        frac = min(1.0, max(0.0, (val - lo) / (hi - lo))) if hi > lo else 0.0
+        if abs(t.get("frac", -1) - frac) > 0.002:
+            t["frac"] = frac
+            t["bar"].set(frac)
+        live = self.link_state == "connected"
+        u = self.temp_unit
+        self._set(t, "val", text=fmt_value(p.convert(val, u)), text_color=C["ink"] if live else C["stale"])
+        text = f"low {fmt_value(p.convert(rng[0], u))}    high {fmt_value(p.convert(rng[1], u))}"
+        if self.settings.get("advanced", True):
+            text = f"raw {rawhex}    " + text
+        if err:
+            text += "    last read failed"
+        self._set(t, "sub", text=text, text_color=C["warn"] if err else C["muted"])
+
     def _on_values(self, values: dict, rate: float):
         now = time.time()
-        advanced = bool(self.settings.get("advanced", True))
         if self.logging_path:
             self.log_rows += 1
         for i, (val, rawhex, err) in values.items():
@@ -1023,29 +1093,8 @@ class App(ctk.CTk if ctk else object):
                 self.last_raw[p.pid] = bytes.fromhex(rawhex)
             if val is not None:
                 self.history.setdefault(i, deque(maxlen=6000)).append((now, val))
-            t = self.tiles.get(i)
-            if not t:
-                continue
-            if val is None:
-                self._set(t, "val", text="--", text_color=C["stale"])
-                self._set(t, "sub", text=(err or "No data")[:70], text_color=C["bad"])
-                continue
-            rng = t["range"]
-            rng[0] = val if rng[0] is None else min(rng[0], val)
-            rng[1] = val if rng[1] is None else max(rng[1], val)
-            lo = p.gauge_min if p.gauge_min is not None else rng[0]
-            hi = p.gauge_max if p.gauge_max is not None else rng[1]
-            frac = min(1.0, max(0.0, (val - lo) / (hi - lo))) if hi > lo else 0.0
-            if abs(t.get("frac", -1) - frac) > 0.002:
-                t["frac"] = frac
-                t["bar"].set(frac)
-            self._set(t, "val", text=fmt_value(val), text_color=C["ink"])
-            text = f"low {fmt_value(rng[0])}    high {fmt_value(rng[1])}"
-            if advanced:
-                text = f"raw {rawhex}    " + text
-            if err:
-                text += "    last read failed"
-            self._set(t, "sub", text=text, text_color=C["warn"] if err else C["muted"])
+            self.last_values[i] = (val, rawhex, err)
+            self._render_tile(i)
         if rate:
             self.rate_lbl.configure(text=f"  {rate:.1f} updates/s  ", fg_color=C["chip"])
         self.chart_dirty = False          # draw now so the chart and tiles show the same reading
@@ -1105,8 +1154,9 @@ class App(ctk.CTk if ctk else object):
                 c.create_line(0, ya, x1, ya, fill=C["grid"])
             inset = min(px(8), lane * 0.18)
             c.create_rectangle(0, ya + inset, px(4), yb - inset, fill=color, outline="")
-            pts = [(t, v) for t, v in self.history.get(i, ()) if now - t <= span]
-            units = "" if p.units == "raw" else f" {p.units}"
+            pts = [(t, p.convert(v, self.temp_unit)) for t, v in self.history.get(i, ()) if now - t <= span]
+            u = p.units_for(self.temp_unit)
+            units = "" if u == "raw" else f" {u}"
             current = f"{fmt_value(pts[-1][1])}{units}" if pts else "--"
             mid = (ya + yb) / 2
             if compact:
@@ -1156,6 +1206,7 @@ class App(ctk.CTk if ctk else object):
             except OSError as e:
                 messagebox.showerror("Could not save", f"pids.json could not be written:\n{e}")
         self.history.clear()
+        self.last_values.clear()
         self._rebuild_tiles()
         self._save_charted()
         self._refresh_channel_list()
@@ -1245,23 +1296,51 @@ class App(ctk.CTk if ctk else object):
         self.engine.send("scan", lo, hi)
 
     def _watch(self):
-        pids = [pid for pid, row in sorted(self.scan_rows.items()) if row["result"] == "answers"]
-        if not pids:
+        answering = [pid for pid, row in sorted(self.scan_rows.items()) if row["result"] == "answers"]
+        if not answering:
             messagebox.showinfo("Nothing to watch", "Run a scan first. Watch re-reads the PIDs that answered.")
             return
         if self.link_state != "connected":
             messagebox.showinfo("Not connected", "Connect to the ECU first.")
             return
-        self.scan_prog.set(f"Watching {len(pids)} PIDs. Move the throttle or rev the engine now. "
+        chosen = [int(iid, 16) for iid in self.scan_tree.selection()]
+        pids = sorted(p for p in chosen if p in answering) or answering
+        for pid in pids:
+            self.scan_rows[pid]["fresh"] = True     # Low, High and Changes restart from the next reading
+        which = f"{len(pids)} selected PIDs" if len(pids) < len(answering) or chosen else f"all {len(pids)} PIDs"
+        self.scan_prog.set(f"Watching {which}. Change what you want to find now, then sort by Swing. "
                            "Press Stop to go back to live data.")
         self.engine.send("watch", pids)
+
+    def _sort_scan(self, col: str):
+        tree = self.scan_tree
+
+        def num(text):
+            s = str(text).strip().rstrip("%")
+            try:
+                return float(int(s, 16)) if s.lower().startswith("0x") else float(s)
+            except ValueError:
+                return None
+
+        keyed = [(num(tree.set(iid, col)), iid) for iid in tree.get_children("")]
+        last_col, last_desc = self.scan_sort
+        desc = (not last_desc) if last_col == col else col in ("bytes", "value", "low", "high", "swing", "changes")
+        self.scan_sort = (col, desc)
+        have = sorted([k for k in keyed if k[0] is not None], key=lambda k: k[0], reverse=desc)
+        order = [iid for _, iid in have] + [iid for v, iid in keyed if v is None]
+        for index, iid in enumerate(order):
+            tree.move(iid, "", index)
 
     def _put_scan_row(self, pid: int, row: dict, tags=None):
         answered = row["result"] == "answers"
         if not answered and not self.scan_show_all.get():
             return
         iid = f"{pid:02X}"
-        values = (f"0x{pid:02X}", row["result"], row["n"] or "", row["data"], row["changes"])
+        lo, hi = row.get("lo"), row.get("hi")
+        swing = f"{(hi - lo) * 100.0 / hi:.1f}%" if hi else ""
+        values = (f"0x{pid:02X}", row["result"], row["n"] or "", row["data"],
+                  "" if row.get("val") is None else row["val"], "" if lo is None else lo, "" if hi is None else hi,
+                  swing, row["changes"])
         if tags is None:
             tags = () if answered else ("dim",)
         if self.scan_tree.exists(iid):
@@ -1275,7 +1354,9 @@ class App(ctk.CTk if ctk else object):
             self._put_scan_row(pid, row)
 
     def _on_scan(self, pid: int, result: str, data: str, n: int):
-        row = {"result": result, "data": data, "n": n, "changes": 0, "first": data}
+        val = int.from_bytes(bytes.fromhex(data), "big") if data else None
+        row = {"result": result, "data": data, "n": n, "changes": 0, "first": data,
+               "val": val, "lo": val, "hi": val}
         self.scan_rows[pid] = row
         if data:
             self.last_raw[pid] = bytes.fromhex(data)
@@ -1290,10 +1371,22 @@ class App(ctk.CTk if ctk else object):
             return
         if data:
             self.last_raw[pid] = bytes.fromhex(data)
-        if data != row["data"]:
+        val = int.from_bytes(bytes.fromhex(data), "big") if data else None
+        fresh = row.pop("fresh", False)
+        if fresh:                                   # first reading after Watch was pressed: start measuring from here
+            row["lo"] = row["hi"] = val
+            row["changes"] = 0
+        changed = data != row["data"] and not fresh
+        if not changed and not fresh:
+            return
+        if changed:
             row["changes"] += 1
-            row["data"] = data
-            self._put_scan_row(pid, row, tags=("changed",))
+        row["data"], row["val"] = data, val
+        if val is not None:
+            row["lo"] = val if row.get("lo") is None else min(row["lo"], val)
+            row["hi"] = val if row.get("hi") is None else max(row["hi"], val)
+        self._put_scan_row(pid, row, tags=("changed",) if changed else None)
+        if changed:
             iid = f"{pid:02X}"
             self.after(700, lambda iid=iid: self.scan_tree.exists(iid) and self.scan_tree.item(iid, tags=()))
 
@@ -1340,9 +1433,12 @@ class App(ctk.CTk if ctk else object):
             return
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["pid", "result", "bytes", "first_answer", "last_answer", "changes_seen"])
+            w.writerow(["pid", "result", "bytes", "first_answer", "last_answer", "value", "low", "high",
+                        "changes_seen"])
             for pid, r in sorted(self.scan_rows.items()):
-                w.writerow([f"0x{pid:02X}", r["result"], r["n"], r["first"], r["data"], r["changes"]])
+                w.writerow([f"0x{pid:02X}", r["result"], r["n"], r["first"], r["data"],
+                            "" if r.get("val") is None else r["val"], "" if r.get("lo") is None else r["lo"],
+                            "" if r.get("hi") is None else r["hi"], r["changes"]])
         self._status(f"Scan saved to {path}", "ok")
 
     # ---------------------------------------------------------------- console
@@ -1474,14 +1570,13 @@ class ChannelDialog(ctk.CTkToplevel if ctk else object):
         self.v_gmax = tk.StringVar(value=opt(p.gauge_max))
         self.v_enabled = tk.BooleanVar(value=p.enabled)
         self.v_verified = tk.BooleanVar(value=p.verified)
-        self.v_notes = tk.StringVar(value=p.notes)
 
         card = app._card(self)
         card.pack(fill="both", expand=True, padx=18, pady=(18, 0))
         card.grid_columnconfigure(1, weight=1)
         fields = (("Name", self.v_name, 300), ("PID (hex)", self.v_pid, 90), ("Formula", self.v_formula, 300),
                   ("Units", self.v_units, 110), ("Read every N updates", self.v_every, 90),
-                  ("Gauge low", self.v_gmin, 110), ("Gauge high", self.v_gmax, 110), ("Notes", self.v_notes, 460))
+                  ("Gauge low", self.v_gmin, 110), ("Gauge high", self.v_gmax, 110))
         for r, (label, var, width) in enumerate(fields):
             ctk.CTkLabel(card, text=label, font=app.f(13), text_color=C["ink"], anchor="w").grid(
                 row=r, column=0, sticky="w", padx=(18, 14), pady=(14 if r == 0 else 5, 5))
@@ -1489,13 +1584,49 @@ class ChannelDialog(ctk.CTkToplevel if ctk else object):
                          border_color=C["line"], fg_color=C["panel"], text_color=C["ink"], font=app.f(13)).grid(
                 row=r, column=1, sticky="w", padx=(0, 18), pady=(14 if r == 0 else 5, 5))
         r = len(fields)
+        try:                                       # shorter notes box on small screens so the dialog still fits
+            notes_h = 100 if app.winfo_screenheight() / app.s >= 900 else 64
+        except (tk.TclError, TypeError, ZeroDivisionError):
+            notes_h = 100
+        ctk.CTkLabel(card, text="Notes", font=app.f(13), text_color=C["ink"], anchor="nw").grid(
+            row=r, column=0, sticky="nw", padx=(18, 14), pady=(10, 5))
+        self.notes_box = ctk.CTkTextbox(card, width=520, height=notes_h, corner_radius=8, border_width=1,
+                                        border_color=C["line"], fg_color=C["panel"], text_color=C["ink"],
+                                        font=app.f(13), wrap="word")
+        self.notes_box.grid(row=r, column=1, sticky="w", padx=(0, 18), pady=5)
+        self.notes_box.insert("1.0", p.notes)
+        r += 1
         ctk.CTkLabel(card, font=app.f(12), text_color=C["muted"], justify="left", anchor="w",
                      text="Formula letters: A is the first data byte, B the second, and so on. raw is all the bytes as "
                           "one number, sraw the same but signed.\nExamples:  A*100 + B    (A - 48) / 1.6    "
                           "raw * 100 / 1024\nRead every: 1 for fast channels like RPM, 10 or more for slow ones like "
                           "temperature.\nGauge low and high set the tile's bar. Leave them blank to scale it to the "
-                          "values seen.").grid(row=r, column=0, columnspan=2, sticky="w", padx=18, pady=(8, 6))
+                          "values seen.\nTemperatures: make the formula give degrees C and set Units to \u00b0C, "
+                          "and the tile, chart and log can switch between \u00b0C and \u00b0F."
+                     ).grid(row=r, column=0, columnspan=2, sticky="w", padx=18, pady=(8, 6))
         r += 1
+
+        # Two-point calibration: capture the reading at 0 % and at 100 %, and the formula writes itself.
+        self.cal = {"closed": None, "open": None}
+        self._cal_busy = False
+        self.cal_var = tk.StringVar(value="")
+        cal = ctk.CTkFrame(card, fg_color="transparent")
+        cal.grid(row=r, column=0, columnspan=2, sticky="w", padx=18, pady=(4, 10))
+        ctk.CTkLabel(cal, text="Calibrate to 0 to 100 %", font=app.f(13, "bold"), text_color=C["ink"],
+                     anchor="w").grid(row=0, column=0, columnspan=3, sticky="w")
+        ctk.CTkLabel(cal, font=app.f(12), text_color=C["muted"], anchor="w", justify="left",
+                     text="Connect first. Press a button, then hold the throttle in that position. "
+                          "The reading is taken 3 seconds later.").grid(row=1, column=0, columnspan=3,
+                                                                       sticky="w", pady=(0, 6))
+        app._button(cal, "Capture 0 % (closed)", lambda: self._capture("closed"), width=180, height=32).grid(
+            row=2, column=0, sticky="w")
+        app._button(cal, "Capture 100 % (wide open)", lambda: self._capture("open"), width=200, height=32).grid(
+            row=2, column=1, sticky="w", padx=(8, 0))
+        ctk.CTkLabel(cal, textvariable=self.cal_var, font=app.f(12), text_color=C["ink"], anchor="w",
+                     justify="left", wraplength=520, height=18).grid(row=3, column=0, columnspan=3, sticky="w",
+                                                                    pady=(4, 0))
+        r += 1
+
         for var, text in ((self.v_enabled, "Switched on"),
                           (self.v_verified, "Scaling checked against a known-good reading")):
             ctk.CTkSwitch(card, text=text, variable=var, onvalue=True, offvalue=False, font=app.f(13),
@@ -1534,10 +1665,65 @@ class ChannelDialog(ctk.CTkToplevel if ctk else object):
         except tk.TclError:
             pass
 
+    def _capture(self, which: str):
+        if self._cal_busy:
+            return
+        try:
+            pid = kl.parse_pid(self.v_pid.get())
+        except ValueError:
+            self.cal_var.set("Enter a valid PID first.")
+            return
+        if self.app.link_state != "connected":
+            self.cal_var.set("Connect to the ski (or Demo) first, so there are live readings to capture.")
+            return
+        self._cal_busy = True
+        self._cal_count(which, pid, 3)
+
+    def _cal_count(self, which: str, pid: int, n: int):
+        if not self.winfo_exists():
+            return
+        if n > 0:
+            where = "closed" if which == "closed" else "wide open"
+            self.cal_var.set(f"Hold it {where}... reading in {n}")
+            self.after(1000, lambda: self._cal_count(which, pid, n - 1))
+        else:
+            self.cal_var.set("Reading...")
+            self._cal_sample(which, pid, [], 0)
+
+    def _cal_sample(self, which: str, pid: int, samples: list, k: int):
+        if not self.winfo_exists():
+            return
+        data = self.app.last_raw.get(pid)
+        if data:
+            samples.append(int.from_bytes(data, "big"))
+        if k < 10:                                   # about 1 second of readings, then take the middle one
+            self.after(100, lambda: self._cal_sample(which, pid, samples, k + 1))
+            return
+        self._cal_busy = False
+        if not samples:
+            self.cal_var.set(f"No readings for PID 0x{pid:02X}. Check the channel is switched on and connected.")
+            return
+        self.cal[which] = sorted(samples)[len(samples) // 2]
+        c, o = self.cal["closed"], self.cal["open"]
+        if c is None or o is None:
+            have = "0 %" if o is None else "100 %"
+            need = "100 % (wide open)" if o is None else "0 % (closed)"
+            self.cal_var.set(f"Captured {have} = {self.cal[which]}. Now capture {need}.")
+        elif c == o:
+            self.cal_var.set(f"Both readings are {c}, so there's nothing to scale. Move the throttle between "
+                             "the two captures.")
+        else:
+            self.v_formula.set(f"max(0, min(100, (raw - {c}) * 100 / ({o} - {c})))")
+            self.v_units.set("%")
+            self.v_gmin.set("0")
+            self.v_gmax.set("100")
+            self.cal_var.set(f"0 % = {c}, 100 % = {o}. Formula, units and gauge are filled in. "
+                             "Press Save channel to keep them.")
+
     def _build(self) -> kl.PidDef:
         return kl.PidDef(self.v_name.get(), self.v_pid.get(), self.v_formula.get(), self.v_units.get(),
                          self.v_enabled.get(), int(self.v_every.get() or 1), self.v_verified.get(),
-                         self.v_notes.get(), self.v_gmin.get(), self.v_gmax.get())
+                         self.notes_box.get("1.0", "end-1c").strip(), self.v_gmin.get(), self.v_gmax.get())
 
     def _try(self):
         try:
