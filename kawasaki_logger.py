@@ -31,7 +31,7 @@ except ImportError:
 import kline as kl
 
 APP_NAME = "K-line Logger"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 FROZEN = getattr(sys, "frozen", False)                # True when running as the installed .exe
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if FROZEN else __file__))
 BUNDLE_DIR = getattr(sys, "_MEIPASS", APP_DIR)        # where PyInstaller unpacks bundled files
