@@ -1,0 +1,96 @@
+{
+  "_readme": [
+    "Channel definitions for kawasaki_logger.py. You can edit these in the app's Channels tab.",
+    "pid: hex local identifier sent as '21 <pid>'. every: read on every Nth update (1 = every time).",
+    "formula variables: A B C D... (data bytes), raw, sraw, n, d. Functions: abs min max round signed(v,bits) math.*",
+    "verified: set true once a channel's scaling has been checked against a known-good reading.",
+    "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session."
+  ],
+  "defaults_revision": 1,
+  "pids": [
+    {
+      "name": "Engine RPM",
+      "pid": "0x09",
+      "formula": "raw",
+      "units": "rpm",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "Assumes the 16-bit value is rpm. Not checked yet: it reads 00 00 with the engine off. At idle, compare with the ski's tach and note the raw hex.",
+      "gauge_min": 0.0,
+      "gauge_max": 8000.0
+    },
+    {
+      "name": "Throttle sensor",
+      "pid": "0x04",
+      "formula": "max(0, min(100, (raw - 246) * 100 / (912 - 246)))",
+      "units": "%",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "Ultra LX: closed = 246 and wide open = 912 counts (about 1.2 V and 4.5 V if 10-bit at 5 V). Use Capture 0 % / 100 % in Edit to set your own ski's values.",
+      "gauge_min": 0.0,
+      "gauge_max": 100.0
+    },
+    {
+      "name": "Intake pressure",
+      "pid": "0x08",
+      "formula": "raw * 0.124",
+      "units": "kPa",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "The PID returns counts, not kPa: 817 counts at key-on is about 101 kPa (3.99 V if 10-bit at 5 V). 0.124 kPa per count makes key-on read ambient. Check idle vacuum (about 35-45 kPa). The ECU's own sensor curve would give the exact slope.",
+      "gauge_min": 0.0,
+      "gauge_max": 110.0
+    },
+    {
+      "name": "Barometric pressure",
+      "pid": "0x05",
+      "formula": "raw * 0.124",
+      "units": "kPa",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Not in the original kline.py defaults. Found via PID scan on a 2007 Ultra LX: at key-on/engine-off, 0x05 read the exact same raw bytes (0x0331 = 817) as Intake pressure (0x08) at the same instant. This ski has only one physical MAP sensor (no separate barometric sensor), so 0x05 is more likely a software-derived reference the ECU captures from that same MAP sensor at key-on (before any vacuum develops) and holds steady, rather than a second physical sensor. Unverified — confirm by checking that 0x05 stays frozen while 0x08 changes with throttle/RPM once the engine is running.",
+      "gauge_min": 0.0,
+      "gauge_max": 110.0
+    },
+    {
+      "name": "Engine temp",
+      "pid": "0x06",
+      "formula": "raw - 40",
+      "units": "°C",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an infrared thermometer once it's warm. Units of C make it switchable between C and F. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski.",
+      "gauge_min": 0.0,
+      "gauge_max": 105.0
+    },
+    {
+      "name": "Intake air temp",
+      "pid": "0x07",
+      "formula": "raw - 40",
+      "units": "°C",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Same encoding as engine temp. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski.",
+      "gauge_min": 0.0,
+      "gauge_max": 70.0
+    },
+    {
+      "name": "Battery",
+      "pid": "0x0A",
+      "formula": "raw / 12.75",
+      "units": "V",
+      "enabled": false,
+      "every": 10,
+      "verified": false,
+      "notes": "Switched off: PID 0x0A returned 00 00 on an Ultra LX with key on, so it isn't battery voltage there. Use the PID scanner to find the right one (look for a value that jumps up when the engine runs).",
+      "gauge_min": 0.0,
+      "gauge_max": 20.0
+    }
+  ]
+}

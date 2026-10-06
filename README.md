@@ -6,6 +6,8 @@ Live data and datalogging for Kawasaki personal watercraft through the KDS diagn
 
 Not affiliated with or endorsed by Kawasaki. Channel scalings marked "unverified" haven't been checked against a known-good reading yet.
 
+This is the Windows desktop app, which talks to the ECU over a raw K-line USB cable. There's also an [iOS app](ios/README.md) that talks to the same ECU over a Veepeak Wi-Fi (ELM327) adapter instead.
+
 ## Install (Windows)
 
 1. Download [KlineLogger-Setup.exe](../../releases/latest/download/KlineLogger-Setup.exe) (always the newest version).
