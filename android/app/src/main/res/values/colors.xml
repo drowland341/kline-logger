@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors ui/theme/Color.kt for the window, splash screen and launcher icon. -->
+    <color name="brand_background">#FF0A111E</color>
+    <color name="brand_accent">#FF00D4FF</color>
+</resources>

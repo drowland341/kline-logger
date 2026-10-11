@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Always dark: the window shows navy before Compose draws, so there's no white flash. -->
+    <style name="Theme.KlineLogger" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/brand_background</item>
+        <item name="android:colorAccent">@color/brand_accent</item>
+    </style>
+
+    <style name="Theme.KlineLogger.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/brand_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.KlineLogger</item>
+    </style>
+</resources>
