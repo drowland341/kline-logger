@@ -43,27 +43,29 @@ struct LivePIDsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
+            GeometryReader { outerGeo in
+                ScrollView {
+                    VStack(spacing: 12) {
+                        ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
 
-                    gaugesRow
+                        gaugesSection(containerSize: outerGeo.size)
 
-                    if !isDemo, wifiManager != nil {
-                        speedComparisonCard
-                    }
+                        if !isDemo, wifiManager != nil {
+                            speedComparisonCard
+                        }
 
-                    if cardReadings.isEmpty {
-                        emptyState
-                    } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
-                            ForEach(cardReadings) { reading in
-                                PIDCard(reading: reading)
+                        if cardReadings.isEmpty {
+                            emptyState
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
+                                ForEach(cardReadings) { reading in
+                                    PIDCard(reading: reading)
+                                }
                             }
                         }
                     }
+                    .padding()
                 }
-                .padding()
             }
             .navigationTitle("Live Data")
             .toolbar {
@@ -93,25 +95,56 @@ struct LivePIDsView: View {
         }
     }
 
-    private var gaugesRow: some View {
-        HStack(spacing: 16) {
-            RadialGaugeView(
-                value: rpmValue,
-                range: rpmRange,
-                title: "Engine RPM",
-                unit: "RPM",
-                valueText: String(Int(rpmValue))
-            )
+    private var rpmGauge: some View {
+        RadialGaugeView(
+            value: rpmValue,
+            range: rpmRange,
+            title: "Engine RPM",
+            unit: "RPM",
+            valueText: String(Int(rpmValue))
+        )
+    }
 
-            RadialGaugeView(
-                value: gpsManager.speedMPH ?? 0,
-                range: 0...70,
-                title: "GPS Speed",
-                unit: "mph",
-                valueText: gpsManager.speedMPH.map { String(format: "%.1f", $0) } ?? "—"
-            )
+    private var speedGauge: some View {
+        RadialGaugeView(
+            value: gpsManager.speedMPH ?? 0,
+            range: 0...70,
+            title: "GPS Speed",
+            unit: "mph",
+            valueText: gpsManager.speedMPH.map { String(format: "%.1f", $0) } ?? "—"
+        )
+    }
+
+    /// In portrait, the gauges stack vertically and use the full screen width, making them bigger
+    /// than a side-by-side layout would allow. In landscape, they lay out side by side instead,
+    /// using the full screen height. Each gauge is always drawn upright — this is a plain
+    /// responsive re-layout (VStack vs. HStack), not a rotation of the gauge's content.
+    private func gaugesSection(containerSize: CGSize) -> some View {
+        let horizontalInset: CGFloat = 32
+        let availableWidth = max(containerSize.width - horizontalInset, 1)
+        let isLandscape = containerSize.width > containerSize.height
+
+        return Group {
+            if isLandscape {
+                let availableHeight = max(containerSize.height - 90, 160)
+                HStack(spacing: 16) {
+                    rpmGauge
+                        .frame(maxHeight: .infinity)
+                    speedGauge
+                        .frame(maxHeight: .infinity)
+                }
+                .frame(height: availableHeight)
+                .frame(maxWidth: .infinity)
+            } else {
+                VStack(spacing: 16) {
+                    rpmGauge
+                        .frame(maxWidth: .infinity)
+                    speedGauge
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(width: availableWidth)
+            }
         }
-        .frame(height: 170)
     }
 
     private var speedComparisonCard: some View {
