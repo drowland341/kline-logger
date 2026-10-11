@@ -11,12 +11,12 @@
     {
       "name": "Engine RPM",
       "pid": "0x09",
-      "formula": "raw",
+      "formula": "raw * 4",
       "units": "rpm",
       "enabled": true,
       "every": 1,
       "verified": false,
-      "notes": "Assumes the 16-bit value is rpm. Not checked yet: it reads 00 00 with the engine off. At idle, compare with the ski's tach and note the raw hex.",
+      "notes": "Was 'raw' with no scaling (unverified default). At base idle on a 2007 Ultra LX, raw read 306 while the ski's actual idle is ~1200 rpm — 306 * 4 = 1224, a close match. This ECU appears to store RPM in units of 4 rpm per count (opposite of standard OBD-II's PID 0x0C, which divides by 4). Confirmed at one data point (idle); would be good to confirm at a second RPM (e.g. a brief rev) to rule out a non-multiplicative offset.",
       "gauge_min": 0.0,
       "gauge_max": 8000.0
     },

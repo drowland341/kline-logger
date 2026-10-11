@@ -22,10 +22,12 @@ struct HomeView: View {
             Spacer()
 
             VStack(spacing: 16) {
-                Image(systemName: "gauge.with.dots.needle.50percent")
-                    .font(.system(size: 72))
-                    .foregroundStyle(.tint)
-                    .symbolRenderingMode(.hierarchical)
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
 
                 VStack(spacing: 4) {
                     Text("KlineLogger")
