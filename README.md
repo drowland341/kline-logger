@@ -1,10 +1,24 @@
-<p align="center"><img src="assets/icon.png" width="96" alt=""></p>
+<p align="center"><img src="branding/kline-logger-icon-512.png" width="112" alt="K-line Logger icon"></p>
 
 # K-line Logger
 
-Live data and datalogging for Kawasaki personal watercraft through the KDS diagnostic port. It reads sensor values from the ECU over a USB K-line cable, shows them as gauges and a chart, and records CSV logs. A built-in PID scanner helps find what each ECU reports.
+Live data, datalogging and diagnostics for Kawasaki personal watercraft through the KDS diagnostic port. The apps read sensor values from the ECU, show them as gauges, record CSV logs, and include a PID scanner for finding what each ECU reports.
 
 Not affiliated with or endorsed by Kawasaki. Channel scalings marked "unverified" haven't been checked against a known-good reading yet.
+
+## Apps
+
+All three apps speak the same Kawasaki KWP2000 dialect (see [Protocol notes](#protocol-notes)) and use the same `pids.json` channel format, so a channel confirmed on one platform can be copied to the others.
+
+| App | Folder | Connects with | Get it |
+|---|---|---|---|
+| **Windows** | repo root | USB K-line cable (KKL / FTDI) | [Installer](../../releases/latest/download/KlineLogger-Setup.exe), or run from source (below) |
+| **Android** | [`android/`](android/) | USB K-line cable through a USB-C / OTG adapter | Build with Android Studio, see [android/README.md](android/README.md) |
+| **iOS** | [`ios/`](ios/) | Wi-Fi ELM327 adapter (Veepeak OBDCheck) | Build with Xcode, see [ios/README.md](ios/README.md) |
+
+The Android and iOS apps share the gauge icon above. Icon and logo files (512 and 1024 px PNGs) are in [`branding/`](branding/).
+
+The rest of this page covers the Windows app, plus the formula, protocol and troubleshooting notes that apply to all three.
 
 ## Install (Windows)
 
@@ -14,7 +28,7 @@ Not affiliated with or endorsed by Kawasaki. Channel scalings marked "unverified
 
 Settings and channels are stored in `%APPDATA%\K-line Logger`, and logs go to `Documents\K-line Logger\logs`. Uninstalling leaves both in place.
 
-## Run from source
+## Run from source (Windows)
 
 1. Install Python 3.9 or newer from python.org. Tick "Add python.exe to PATH" in the installer.
 2. Open a command prompt in this folder and run `pip install -r requirements.txt`.
@@ -31,7 +45,7 @@ When run from source, settings, channels and logs are kept in this folder.
 
 **Speed tip for FTDI cables:** Device Manager → Ports → USB Serial Port → Properties → Port Settings → Advanced → set Latency Timer to 1 ms. The default 16 ms adds a delay to every request.
 
-## First connection
+## First connection (Windows)
 
 1. Pick **Demo** as the cable and press Connect to see how everything works.
 2. Plug the Kawasaki 4-pin adapter into the ski's diagnostic port and the OBD end into the USB cable.
@@ -40,7 +54,7 @@ When run from source, settings, channels and logs are kept in this folder.
 Supported cables: USB K-line cables that show up as a serial port, such as KKL 409.1 cables with an FTDI chip. J2534 pass-thru devices like the Tactrix OpenPort 2.0 don't show up as a serial port and aren't supported yet.
 4. If the status says "Waiting for the ECU", the app keeps retrying every 2 seconds. It also reconnects on its own if the ECU drops out, for example during cranking.
 
-## Pages
+## Pages (Windows)
 
 **Live data.** One tile per channel with the value, a gauge bar, and the low/high seen since connecting. Values turn grey when the ECU isn't connected, so stale numbers are obvious. The **°F / °C** switch at the right of the toolbar changes the temperature tiles, the chart and any new logs; it locks while a log is recording so one file never mixes units, and your choice is remembered. Press **Chart** on a tile (or click anywhere on it) to add it to the chart below. Every charted channel gets its own lane on a shared time axis, so there's no limit and nothing gets bumped off. **Chart all** and **Clear** are at the top of the chart, along with a 15/30/60 second window. Your chart picks are remembered between sessions. Start logging (Ctrl+L) writes a CSV into the `logs` folder named with the date and your run name; while it records, the button turns red and a timer and row count run under it. Press F2 or Add marker to drop a marker (M1, M2...) into the log, handy at the start of a WOT pull. The marker also shows on the chart.
 
@@ -102,10 +116,13 @@ Kawasaki ECUs ignore requests sent faster than roughly 50 ms apart, so the defau
 | `kline.py` | Protocol, logging, scanner and the simulated ECU, no GUI code |
 | `pids.json` | Default channel list |
 | `selftest.py` | Checks the install against the simulated ECU |
-| `assets/` | App icon and header logo |
+| `assets/` | Windows app icon and header logo |
 | `KlineLogger.spec` | PyInstaller recipe for the Windows app |
 | `installer.iss` | Inno Setup script for the installer |
 | `build_windows.bat` | Builds the app and the installer in one step |
+| `android/` | Android app (Kotlin, Jetpack Compose) |
+| `ios/` | iOS app (SwiftUI) |
+| `branding/` | Shared app icon and logo for the phone apps |
 | `LICENSE` | MIT license |
 
 ## License
