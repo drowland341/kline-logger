@@ -35,26 +35,14 @@
       "gauge_max": 100.0
     },
     {
-      "name": "Intake pressure",
-      "pid": "0x08",
+      "name": "Intake Pressure",
+      "pid": "0x05",
       "formula": "raw * 0.124",
       "units": "kPa",
       "enabled": true,
       "every": 1,
       "verified": false,
-      "notes": "The PID returns counts, not kPa: 817 counts at key-on is about 101 kPa (3.99 V if 10-bit at 5 V). 0.124 kPa per count makes key-on read ambient. Check idle vacuum (about 35-45 kPa). The ECU's own sensor curve would give the exact slope.",
-      "gauge_min": 0.0,
-      "gauge_max": 110.0
-    },
-    {
-      "name": "Barometric pressure",
-      "pid": "0x05",
-      "formula": "raw * 0.124",
-      "units": "kPa",
-      "enabled": true,
-      "every": 10,
-      "verified": false,
-      "notes": "Not in the original kline.py defaults. Found via PID scan on a 2007 Ultra LX: at key-on/engine-off, 0x05 read the exact same raw bytes (0x0331 = 817) as Intake pressure (0x08) at the same instant. This ski has only one physical MAP sensor (no separate barometric sensor), so 0x05 is more likely a software-derived reference the ECU captures from that same MAP sensor at key-on (before any vacuum develops) and holds steady, rather than a second physical sensor. Unverified — confirm by checking that 0x05 stays frozen while 0x08 changes with throttle/RPM once the engine is running.",
+      "notes": "This ski has only one physical pressure sensor (in the intake manifold) — no separate barometric sensor. PID 0x05 is that live reading: in a 2026-10-13 idle/rev research log it read ~101.7 kPa at key-on/engine-off (atmospheric), dropped to ~58 kPa once the engine started and settled into idle (manifold vacuum), then rose to ~79 kPa during a rev to 4284 rpm (vacuum partially collapsing). PID 0x08 previously held this channel but was found frozen at a constant 101.8 kPa for the entire session regardless of engine/RPM state — a dead/duplicate register — and was removed. every bumped from 10 to 1 since this is a fast-changing signal, not a slow one like true barometric pressure.",
       "gauge_min": 0.0,
       "gauge_max": 110.0
     },
@@ -66,7 +54,7 @@
       "enabled": true,
       "every": 10,
       "verified": false,
-      "notes": "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an infrared thermometer once it's warm. Units of C make it switchable between C and F. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski.",
+      "notes": "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an infrared thermometer once it's warm. Units of C make it switchable between C and F. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski. A 2026-10-13 water test on another ski showed this channel staying a sane 59-70 C through a sustained 6000+ rpm run while that ski threw an OILH (oil temp high) warning — so on that ECU at least, 0x06 is not the oil sensor; see PID 0x98 below.",
       "gauge_min": 0.0,
       "gauge_max": 105.0
     },
@@ -83,6 +71,18 @@
       "gauge_max": 70.0
     },
     {
+      "name": "Oil Temp",
+      "pid": "0x98",
+      "formula": "raw - 40",
+      "units": "°C",
+      "enabled": true,
+      "every": 1,
+      "verified": false,
+      "notes": "Found via the full-scan Research Log, not in the original kline.py defaults. In a 2026-10-13 water test, this ski threw an OILH (oil temp high) dash warning and backed off from a sustained ~6200 rpm / 42 mph cruise to idle at t=117s, never recovering for the rest of the session. PID 0x98, decoded with the same raw-40 convention as 0x06/0x07, climbed 142C -> 135C -> 153C over that same run, peaking right as the warning apparently hit — while 0x06 ('Engine temp') stayed a boring 59-70C the whole time. Also at t=116.8s, PID 0x02 flipped one bit (0x40->0x42 in its first byte) and latched there for the rest of the session, which looks like a fault/status flag turning on at the same moment. Strong circumstantial case for 0x98 = oil temperature, but unverified — confirm with an infrared thermometer at the oil tank/cooler next time OILH comes on, watching this channel live.",
+      "gauge_min": 0.0,
+      "gauge_max": 180.0
+    },
+    {
       "name": "Battery",
       "pid": "0x0A",
       "formula": "raw / 12.75",
@@ -90,7 +90,7 @@
       "enabled": false,
       "every": 10,
       "verified": false,
-      "notes": "Switched off: PID 0x0A returned 00 00 on an Ultra LX with key on, so it isn't battery voltage there. Use the PID scanner to find the right one (look for a value that jumps up when the engine runs).",
+      "notes": "Switched off: PID 0x0A returned 00 00 on an Ultra LX with key on, so it isn't battery voltage there. A 2026-10-13 idle/rev research log on another ski showed 0x0A holding a constant raw value (664) from when it first responded all the way through engine shutoff, with zero sag — a real battery would drop once the alternator stops charging, so 0x0A likely isn't voltage there either. Use the PID scanner to find the right one (look for a value that jumps up when the engine runs and sags after shutoff).",
       "gauge_min": 0.0,
       "gauge_max": 20.0
     }
