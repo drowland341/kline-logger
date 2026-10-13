@@ -34,6 +34,15 @@ struct PIDScannerView: View {
         isDemo ? Double(DemoData.scanCandidates.count) : 256
     }
 
+    private var respondingAddresses: Set<UInt8> {
+        Set(results.filter(\.didRespond).compactMap { address(from: $0.address) })
+    }
+
+    private var allRespondingSelected: Bool {
+        let responding = respondingAddresses
+        return !responding.isEmpty && responding.isSubset(of: selectedPIDs)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -45,6 +54,10 @@ struct PIDScannerView: View {
                             watchPanel
                         } else {
                             scanControl
+
+                            if !isDemo, !isScanning, respondingAddresses.count > 1 {
+                                selectAllButton
+                            }
 
                             if !selectedPIDs.isEmpty {
                                 watchSelectedButton
@@ -125,6 +138,24 @@ struct PIDScannerView: View {
                     .multilineTextAlignment(.center)
             }
         }
+    }
+
+    private var selectAllButton: some View {
+        Button {
+            if allRespondingSelected {
+                selectedPIDs.removeAll()
+            } else {
+                selectedPIDs = respondingAddresses
+            }
+        } label: {
+            Label(
+                allRespondingSelected ? "Deselect All" : "Select All Responding (\(respondingAddresses.count))",
+                systemImage: allRespondingSelected ? "circle" : "checkmark.circle.fill"
+            )
+            .font(.subheadline)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
     }
 
     private var watchSelectedButton: some View {
