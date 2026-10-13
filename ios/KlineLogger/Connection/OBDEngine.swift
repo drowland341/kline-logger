@@ -32,9 +32,11 @@ final class OBDEngine {
     /// Speed Comparison card both read from this rather than re-deriving formulas.
     private(set) var rawValuesByPID: [UInt8: [UInt8]] = [:]
 
-    /// Unconfirmed "might be the paddlewheel speed sensor" PIDs from the 0x00-0xFF scan (0x0D and
-    /// 0x6B read identically at rest). Always polled at low priority so Live Data can show them
-    /// next to GPS speed for comparison, without slowing down the fast PIDs.
+    /// 0x0D and 0x6B read identically at rest — originally suspected as the paddlewheel speed
+    /// sensor, but a 2026-10-13 water test ruled that out: both sat completely flat through a ride
+    /// that swung from 0 to 42.8 mph repeatedly, so they're some other duplicated status/config
+    /// byte, not speed. Still polled at low priority so Live Data can show them next to GPS speed
+    /// in case that changes on a different ECU, without slowing down the fast PIDs.
     private let speedCandidatePIDs: [UInt8] = [0x0D, 0x6B]
 
     /// Extra PIDs Research Mode wants logged alongside the known channels, also polled at low
@@ -64,6 +66,11 @@ final class OBDEngine {
     private var sweepPlan: [UInt8] = []
     private var consecutiveFailures = 0
     private let maxConsecutiveFailures = 3
+
+    /// Fires once a `startScan` run finishes on its own (not via manual `stopScan`), so a caller
+    /// can chain straight into another action — e.g. Research Mode's one-tap "scan everything,
+    /// then log everything that responded" flow — without polling `isScanningPIDs` from the view.
+    private var scanCompletion: (() -> Void)?
 
     /// Alternates every other work-loop tick between a direct re-read of the priority
     /// PID(s) (Engine RPM) and the normal round-robin sweep, so RPM gets roughly half
@@ -134,6 +141,7 @@ final class OBDEngine {
         sweepCounter = 0
         sweepPlan = []
         consecutiveFailures = 0
+        scanCompletion = nil
         priorityTick = false
         priorityIndex = 0
         mode = .polling
@@ -218,6 +226,9 @@ final class OBDEngine {
             guard !remaining.isEmpty else {
                 mode = .polling
                 isScanningPIDs = false
+                let completion = scanCompletion
+                scanCompletion = nil
+                completion?()
                 return
             }
             let pid = remaining.removeFirst()
@@ -298,15 +309,21 @@ final class OBDEngine {
         }
     }
 
-    func startScan(range: ClosedRange<UInt8> = 0x00...0xFF) {
+    /// Scans every local identifier in `range` against the ECU. When `onComplete` is supplied, it
+    /// fires once the scan finishes on its own — not if `stopScan` cancels it early — so a caller
+    /// can safely chain into logic that depends on `scanResults` being complete (e.g. starting a
+    /// research log against everything that responded).
+    func startScan(range: ClosedRange<UInt8> = 0x00...0xFF, onComplete: (() -> Void)? = nil) {
         scanResults = []
         isScanningPIDs = true
+        scanCompletion = onComplete
         mode = .scanning(remaining: Array(range))
     }
 
     func stopScan() {
         mode = .polling
         isScanningPIDs = false
+        scanCompletion = nil
     }
 
     /// "Watch" mode: continuously re-reads just a handful of chosen PIDs (fast cycle, since there

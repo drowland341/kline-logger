@@ -26,28 +26,94 @@ struct ResearchModeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    Text("Logs every known channel plus GPS speed and the PIDs you pick below, once per second, all timestamped together. Move/rev/turn things while logging, then export and look for which PID's value tracks a known action.")
+                    Text("Logs every known channel plus GPS speed, once per second, all timestamped together.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    if respondedPIDs.isEmpty {
-                        Text("Run a PID scan first (PID Scan tab) to choose which extra PIDs to log here.")
-                            .font(.footnote)
+                    fullLogSection
+
+                    if !researchLogger.isLogging {
+                        Divider()
+
+                        Text("Advanced: log a hand-picked subset instead of everything")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                            .padding(.vertical, 20)
-                    } else if !researchLogger.isLogging {
-                        VStack(spacing: 8) {
-                            ForEach(respondedPIDs, id: \.pid) { entry in
-                                selectableRow(pid: entry.pid, result: entry.result)
+
+                        if respondedPIDs.isEmpty {
+                            Text("Run the full scan above (or a scan from the PID Scan tab) to choose individual PIDs here.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 12)
+                        } else {
+                            VStack(spacing: 8) {
+                                ForEach(respondedPIDs, id: \.pid) { entry in
+                                    selectableRow(pid: entry.pid, result: entry.result)
+                                }
                             }
+                            manualStartButton
                         }
                     }
 
-                    controlSection
+                    exportSection
                 }
                 .padding()
             }
             .navigationTitle("Research Log")
+        }
+    }
+
+    private var fullLogSection: some View {
+        VStack(spacing: 8) {
+            if researchLogger.isLogging {
+                Text("\(researchLogger.rows.count) rows logged")
+                    .font(.subheadline.monospacedDigit())
+                if let url = researchLogger.currentFileURL {
+                    Text("Saving to \(url.lastPathComponent)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Button(role: .destructive) {
+                    researchLogger.stop(obdEngine: obdEngine)
+                } label: {
+                    Label("Stop Logging", systemImage: "stop.circle")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            } else {
+                Button(action: startFullLog) {
+                    Label(obdEngine.isScanningPIDs ? "Scanning…" : "Start Full Log", systemImage: "record.circle")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(obdEngine.isScanningPIDs)
+
+                if obdEngine.isScanningPIDs {
+                    ProgressView(value: Double(obdEngine.scanResults.count), total: 256)
+                    Text("Checking all 256 channels for a response — about 15–20 seconds. Logging starts automatically the moment this finishes.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("One tap: scans every channel (0x00–0xFF), then logs everything that responded — alongside RPM, throttle, pressure, temps, and GPS speed — once per second until you stop it. Move/rev/turn things while it runs, then export and look for which PID tracks a known action.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+        }
+    }
+
+    private func startFullLog() {
+        obdEngine.startScan { [obdEngine, gpsManager, researchLogger] in
+            let allResponding = obdEngine.scanResults
+                .filter(\.didRespond)
+                .compactMap { UInt8($0.address.replacingOccurrences(of: "0x", with: ""), radix: 16) }
+                .sorted()
+            researchLogger.start(obdEngine: obdEngine, gpsManager: gpsManager, extraPIDs: allResponding)
         }
     }
 
@@ -76,36 +142,19 @@ struct ResearchModeView: View {
         .buttonStyle(.plain)
     }
 
-    private var controlSection: some View {
-        VStack(spacing: 12) {
-            if researchLogger.isLogging {
-                Text("\(researchLogger.rows.count) rows logged")
-                    .font(.subheadline.monospacedDigit())
-                if let url = researchLogger.currentFileURL {
-                    Text("Saving to \(url.lastPathComponent)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Button(role: .destructive) {
-                    researchLogger.stop(obdEngine: obdEngine)
-                } label: {
-                    Label("Stop Logging", systemImage: "stop.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-            } else {
-                Button {
-                    researchLogger.start(obdEngine: obdEngine, gpsManager: gpsManager, extraPIDs: Array(selectedPIDs).sorted())
-                } label: {
-                    Label("Start Logging", systemImage: "record.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(respondedPIDs.isEmpty)
-            }
+    private var manualStartButton: some View {
+        Button {
+            researchLogger.start(obdEngine: obdEngine, gpsManager: gpsManager, extraPIDs: Array(selectedPIDs).sorted())
+        } label: {
+            Label("Log Selected Only (\(selectedPIDs.count))", systemImage: "record.circle")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
 
+    private var exportSection: some View {
+        Group {
             if !researchLogger.rows.isEmpty, !researchLogger.isLogging {
                 if let url = researchLogger.currentFileURL {
                     ShareLink(item: url) {
