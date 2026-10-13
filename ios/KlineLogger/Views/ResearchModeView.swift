@@ -8,14 +8,14 @@
 import SwiftUI
 
 struct ResearchModeView: View {
-    var wifiManager: WiFiOBDManager
+    var obdEngine: OBDEngine
     var gpsManager: GPSSpeedManager
 
     @State private var researchLogger = ResearchLogger()
     @State private var selectedPIDs: Set<UInt8> = []
 
     private var respondedPIDs: [(pid: UInt8, result: ScannedPID)] {
-        wifiManager.scanResults.compactMap { result in
+        obdEngine.scanResults.compactMap { result in
             guard result.didRespond,
                   let pid = UInt8(result.address.replacingOccurrences(of: "0x", with: ""), radix: 16) else { return nil }
             return (pid, result)
@@ -81,8 +81,13 @@ struct ResearchModeView: View {
             if researchLogger.isLogging {
                 Text("\(researchLogger.rows.count) rows logged")
                     .font(.subheadline.monospacedDigit())
+                if let url = researchLogger.currentFileURL {
+                    Text("Saving to \(url.lastPathComponent)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Button(role: .destructive) {
-                    researchLogger.stop(wifiManager: wifiManager)
+                    researchLogger.stop(obdEngine: obdEngine)
                 } label: {
                     Label("Stop Logging", systemImage: "stop.circle")
                         .frame(maxWidth: .infinity)
@@ -91,7 +96,7 @@ struct ResearchModeView: View {
                 .controlSize(.large)
             } else {
                 Button {
-                    researchLogger.start(wifiManager: wifiManager, gpsManager: gpsManager, extraPIDs: Array(selectedPIDs).sorted())
+                    researchLogger.start(obdEngine: obdEngine, gpsManager: gpsManager, extraPIDs: Array(selectedPIDs).sorted())
                 } label: {
                     Label("Start Logging", systemImage: "record.circle")
                         .frame(maxWidth: .infinity)
@@ -102,12 +107,21 @@ struct ResearchModeView: View {
             }
 
             if !researchLogger.rows.isEmpty, !researchLogger.isLogging {
-                ShareLink(item: researchLogger.exportCSV()) {
-                    Label("Export CSV (\(researchLogger.rows.count) rows)", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity)
+                if let url = researchLogger.currentFileURL {
+                    ShareLink(item: url) {
+                        Label("Share CSV (\(researchLogger.rows.count) rows)", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                } else {
+                    ShareLink(item: researchLogger.exportCSV()) {
+                        Label("Export CSV (\(researchLogger.rows.count) rows)", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
 
                 Button(role: .destructive) {
                     researchLogger.clear()

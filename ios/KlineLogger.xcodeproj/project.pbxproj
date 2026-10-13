@@ -29,9 +29,22 @@
 		9188870D307315C900C1CDDD /* KlineLoggerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KlineLoggerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		9188491B307D9C00002D1983 /* Exceptions for "KlineLogger" folder in "KlineLogger" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 918886F2307315C800C1CDDD /* KlineLogger */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		918886F5307315C800C1CDDD /* KlineLogger */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9188491B307D9C00002D1983 /* Exceptions for "KlineLogger" folder in "KlineLogger" target */,
+			);
 			path = KlineLogger;
 			sourceTree = "<group>";
 		};
@@ -402,6 +415,8 @@
 				DEVELOPMENT_ASSET_PATHS = "\"KlineLogger/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = KlineLogger/Info.plist;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "KlineLogger uses Bluetooth to connect to the Veepeak OBDCheck BLE adapter for reading jet ski ECU data.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "KlineLogger connects to the Veepeak adapter's Wi-Fi interface on your local network to read ECU data.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "KlineLogger uses your location to show GPS speed, so you can compare it against the jet ski's paddlewheel speed sensor.";
@@ -433,6 +448,8 @@
 				DEVELOPMENT_ASSET_PATHS = "\"KlineLogger/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = KlineLogger/Info.plist;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "KlineLogger uses Bluetooth to connect to the Veepeak OBDCheck BLE adapter for reading jet ski ECU data.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "KlineLogger connects to the Veepeak adapter's Wi-Fi interface on your local network to read ECU data.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "KlineLogger uses your location to show GPS speed, so you can compare it against the jet ski's paddlewheel speed sensor.";
