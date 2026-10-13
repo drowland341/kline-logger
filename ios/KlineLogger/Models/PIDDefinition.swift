@@ -20,9 +20,13 @@ struct PIDDefinition: Codable {
     var notes: String
     var gaugeMin: Double?
     var gaugeMax: Double?
+    /// When true, this channel gets a dedicated re-read on every other poll cycle instead of
+    /// sharing equal priority with other "every=1" channels — for gauges (Engine RPM) that need
+    /// to track much faster than the rest of the dashboard. See OBDEngine.pollStep.
+    var priority: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case name, pid, formula, units, enabled, every, verified, notes
+        case name, pid, formula, units, enabled, every, verified, notes, priority
         case gaugeMin = "gauge_min"
         case gaugeMax = "gauge_max"
     }
@@ -44,6 +48,7 @@ struct PIDDefinition: Codable {
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         gaugeMin = try c.decodeIfPresent(Double.self, forKey: .gaugeMin)
         gaugeMax = try c.decodeIfPresent(Double.self, forKey: .gaugeMax)
+        priority = try c.decodeIfPresent(Bool.self, forKey: .priority) ?? false
     }
 }
 

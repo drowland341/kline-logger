@@ -10,7 +10,7 @@ import SwiftUI
 struct PIDScannerView: View {
     var isDemo: Bool
     var connectedDeviceName: String
-    var wifiManager: WiFiOBDManager?
+    var obdEngine: OBDEngine?
     var onEnd: () -> Void
 
     @State private var demoResults: [ScannedPID] = []
@@ -19,15 +19,15 @@ struct PIDScannerView: View {
     @State private var selectedPIDs: Set<UInt8> = []
 
     private var results: [ScannedPID] {
-        isDemo ? demoResults : (wifiManager?.scanResults ?? [])
+        isDemo ? demoResults : (obdEngine?.scanResults ?? [])
     }
 
     private var isScanning: Bool {
-        isDemo ? isDemoScanning : (wifiManager?.isScanningPIDs ?? false)
+        isDemo ? isDemoScanning : (obdEngine?.isScanningPIDs ?? false)
     }
 
     private var isWatching: Bool {
-        wifiManager?.isWatching ?? false
+        obdEngine?.isWatching ?? false
     }
 
     private var totalCandidates: Double {
@@ -40,7 +40,7 @@ struct PIDScannerView: View {
                 VStack(spacing: 12) {
                     ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
 
-                    if isDemo || wifiManager != nil {
+                    if isDemo || obdEngine != nil {
                         if isWatching {
                             watchPanel
                         } else {
@@ -91,12 +91,12 @@ struct PIDScannerView: View {
 
     private var notAvailableState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "hourglass")
+            Image(systemName: "questionmark.circle")
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
-            Text("PID scanning coming soon")
+            Text("No data source connected")
                 .font(.headline)
-            Text("Scanning for responsive PIDs requires ECU protocol support, which is still in progress.")
+            Text("This shouldn't normally happen while connected — try disconnecting and reconnecting.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -129,7 +129,7 @@ struct PIDScannerView: View {
 
     private var watchSelectedButton: some View {
         Button {
-            wifiManager?.startWatching(pids: Array(selectedPIDs).sorted())
+            obdEngine?.startWatching(pids: Array(selectedPIDs).sorted())
         } label: {
             Label("Watch Selected (\(selectedPIDs.count))", systemImage: "eye")
                 .font(.headline)
@@ -141,19 +141,19 @@ struct PIDScannerView: View {
 
     private var watchPanel: some View {
         VStack(spacing: 12) {
-            Text("Watching \(wifiManager?.watchSamples.count ?? 0) PID(s) — wiggle the sensor you're trying to identify and watch for the one that moves.")
+            Text("Watching \(obdEngine?.watchSamples.count ?? 0) PID(s) — wiggle the sensor you're trying to identify and watch for the one that moves.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
             VStack(spacing: 8) {
-                ForEach(wifiManager?.watchSamples ?? []) { sample in
+                ForEach(obdEngine?.watchSamples ?? []) { sample in
                     WatchSampleRow(sample: sample)
                 }
             }
 
             Button(role: .destructive) {
-                wifiManager?.stopWatching()
+                obdEngine?.stopWatching()
             } label: {
                 Label("Stop Watching", systemImage: "eye.slash")
                     .font(.headline)
@@ -178,9 +178,9 @@ struct PIDScannerView: View {
     }
 
     private func startScan() {
-        if let wifiManager {
+        if let obdEngine {
             selectedPIDs = []
-            wifiManager.startScan()
+            obdEngine.startScan()
             return
         }
         demoResults = []
@@ -205,7 +205,7 @@ struct PIDScannerView: View {
                 lines.append("\(result.address)  No response")
             }
         }
-        if let samples = wifiManager?.watchSamples, !samples.isEmpty {
+        if let samples = obdEngine?.watchSamples, !samples.isEmpty {
             lines.append("")
             lines.append("Watch Session")
             for sample in samples {

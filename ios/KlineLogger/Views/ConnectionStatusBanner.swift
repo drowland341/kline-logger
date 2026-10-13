@@ -10,17 +10,22 @@ import SwiftUI
 struct ConnectionStatusBanner: View {
     var isDemo: Bool
     var connectedDeviceName: String
+    /// Landscape phones are short on vertical room, and that room matters a lot
+    /// more to the gauges below than it does to this banner — so compact trims
+    /// the padding and font instead of taking the same space it gets in portrait.
+    var compact: Bool = false
 
     var body: some View {
         HStack {
             Circle()
                 .fill(isDemo ? Color.orange : Color.green)
-                .frame(width: 10, height: 10)
+                .frame(width: compact ? 7 : 10, height: compact ? 7 : 10)
             Text(isDemo ? "Demo Mode — Simulated Data" : "Connected to \(connectedDeviceName)")
-                .font(.subheadline.weight(.medium))
+                .font(compact ? .caption.weight(.medium) : .subheadline.weight(.medium))
             Spacer()
         }
-        .padding()
+        .padding(.horizontal, compact ? 12 : 16)
+        .padding(.vertical, compact ? 6 : 16)
         .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
     }
 }

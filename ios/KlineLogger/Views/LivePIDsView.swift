@@ -13,16 +13,19 @@ struct LivePIDsView: View {
     var isDemo: Bool
     var connectedDeviceName: String
     var adapterInfo: AdapterInfo?
-    var wifiManager: WiFiOBDManager?
+    var obdEngine: OBDEngine?
     var gpsManager: GPSSpeedManager = GPSSpeedManager()
     var onEnd: () -> Void
 
     @State private var demoReadings: [PIDReading] = []
-    @State private var simulationTask: Task<Void, Never>?
+    @State private var demoSpeedMPH: Double = 0
+    @State private var sweepTask: Task<Void, Never>?
+    @State private var jitterTask: Task<Void, Never>?
     @State private var isShowingAdapterInfo = false
+    @State private var isLandscape = false
 
     private var readings: [PIDReading] {
-        isDemo ? demoReadings : (wifiManager?.pidReadings ?? [])
+        isDemo ? demoReadings : (obdEngine?.pidReadings ?? [])
     }
 
     private var cardReadings: [PIDReading] {
@@ -44,13 +47,14 @@ struct LivePIDsView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { outerGeo in
+                let currentlyLandscape = outerGeo.size.width > outerGeo.size.height
                 ScrollView {
                     VStack(spacing: 12) {
-                        ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
+                        ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName, compact: currentlyLandscape)
 
                         gaugesSection(containerSize: outerGeo.size)
 
-                        if !isDemo, wifiManager != nil {
+                        if !isDemo, obdEngine != nil {
                             speedComparisonCard
                         }
 
@@ -66,6 +70,7 @@ struct LivePIDsView: View {
                     }
                     .padding()
                 }
+                .onChange(of: currentlyLandscape, initial: true) { _, newValue in isLandscape = newValue }
             }
             .navigationTitle("Live Data")
             .toolbar {
@@ -84,14 +89,21 @@ struct LivePIDsView: View {
                 }
             }
         }
+        // Landscape phones are short on height, and the tab bar is the single
+        // biggest fixed cost in that budget — hiding it while rotated gives the
+        // gauges meaningfully more room, at the cost of needing to rotate back
+        // to portrait to switch to Codes/PID Scan.
+        .toolbar(isLandscape ? .hidden : .visible, for: .tabBar)
         .task {
             if isDemo {
                 demoReadings = DemoData.livePIDs
-                simulationTask = Task { await runSimulation() }
+                sweepTask = Task { await runSweep() }
+                jitterTask = Task { await runJitter() }
             }
         }
         .onDisappear {
-            simulationTask?.cancel()
+            sweepTask?.cancel()
+            jitterTask?.cancel()
         }
     }
 
@@ -101,42 +113,55 @@ struct LivePIDsView: View {
             range: rpmRange,
             title: "Engine RPM",
             unit: "RPM",
-            valueText: String(Int(rpmValue))
+            valueText: String(Int(rpmValue)),
+            tickCount: 16,
+            tickLabelScale: 1000
         )
     }
 
     private var speedGauge: some View {
-        RadialGaugeView(
-            value: gpsManager.speedMPH ?? 0,
+        let speedMPH: Double? = isDemo ? demoSpeedMPH : gpsManager.speedMPH
+        return RadialGaugeView(
+            value: speedMPH ?? 0,
             range: 0...70,
             title: "GPS Speed",
             unit: "mph",
-            valueText: gpsManager.speedMPH.map { String(format: "%.1f", $0) } ?? "—"
+            valueText: speedMPH.map { String(format: "%.1f", $0) } ?? "—",
+            tickCount: 14,
+            colorZones: GaugeColorStop.flat()
         )
     }
 
     /// In portrait, the gauges stack vertically and use the full screen width, making them bigger
-    /// than a side-by-side layout would allow. In landscape, they lay out side by side instead,
-    /// using the full screen height. Each gauge is always drawn upright — this is a plain
-    /// responsive re-layout (VStack vs. HStack), not a rotation of the gauge's content.
+    /// than a side-by-side layout would allow. In landscape, they lay out side by side instead.
+    /// Each gauge is always drawn upright — this is a plain responsive re-layout (VStack vs.
+    /// HStack), not a rotation of the gauge's content.
     private func gaugesSection(containerSize: CGSize) -> some View {
         let horizontalInset: CGFloat = 32
+        let spacing: CGFloat = 16
         let availableWidth = max(containerSize.width - horizontalInset, 1)
         let isLandscape = containerSize.width > containerSize.height
 
         return Group {
             if isLandscape {
-                let availableHeight = max(containerSize.height - 90, 160)
-                HStack(spacing: 16) {
+                // Only has to clear the compact banner above it now (padding + a
+                // caption-sized line), not the taller portrait banner — leaving
+                // much more of a short landscape screen for the gauges themselves.
+                let availableHeight = max(containerSize.height - 60, 160)
+                // Sized by whichever dimension is tighter, so the pair grows to fill the
+                // full width when there's horizontal room instead of being stuck at
+                // whatever size fits the screen's height alone.
+                let diameter = min(availableHeight, (availableWidth - spacing) / 2)
+                HStack(spacing: spacing) {
                     rpmGauge
-                        .frame(maxHeight: .infinity)
+                        .frame(width: diameter, height: diameter)
                     speedGauge
-                        .frame(maxHeight: .infinity)
+                        .frame(width: diameter, height: diameter)
                 }
                 .frame(height: availableHeight)
                 .frame(maxWidth: .infinity)
             } else {
-                VStack(spacing: 16) {
+                VStack(spacing: spacing) {
                     rpmGauge
                         .frame(maxWidth: .infinity)
                     speedGauge
@@ -184,7 +209,7 @@ struct LivePIDsView: View {
     }
 
     private func rawValueText(for pid: UInt8) -> String {
-        guard let data = wifiManager?.rawValuesByPID[pid] else { return "—" }
+        guard let data = obdEngine?.rawValuesByPID[pid] else { return "—" }
         let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         let decimal = data.reduce(0) { ($0 << 8) | Int($1) }
         return "\(hex)  (\(decimal))"
@@ -192,7 +217,7 @@ struct LivePIDsView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            if wifiManager != nil {
+            if obdEngine != nil {
                 ProgressView()
                 Text("Reading the ECU…")
                     .font(.headline)
@@ -200,12 +225,12 @@ struct LivePIDsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                Image(systemName: "hourglass")
+                Image(systemName: "questionmark.circle")
                     .font(.largeTitle)
                     .foregroundStyle(.secondary)
-                Text("Live data coming soon")
+                Text("No data source connected")
                     .font(.headline)
-                Text("ECU protocol support is still in progress. Once it's wired up, every PID reading will appear here.")
+                Text("This shouldn't normally happen while connected — try disconnecting and reconnecting.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -215,15 +240,42 @@ struct LivePIDsView: View {
         .padding(.vertical, 60)
     }
 
-    private func runSimulation() async {
+    /// Drives the RPM and GPS Speed gauges through a continuous triangle-wave
+    /// sweep — up from the bottom of each gauge's range to the top, then back
+    /// down, forever — so the demo shows off the full color ramp instead of
+    /// idling near one value.
+    private func runSweep() async {
+        let cyclePeriod = 10.0
+        let start = Date()
+        while !Task.isCancelled {
+            let elapsed = Date().timeIntervalSince(start)
+            let t = (elapsed / cyclePeriod).truncatingRemainder(dividingBy: 1)
+            // A sine ease rather than a linear ramp, so the sweep glides through
+            // the top and bottom of the range instead of reversing direction
+            // sharply — reads as fluid motion rather than a mechanical back-and-forth.
+            let phase = (1 - cos(2 * Double.pi * t)) / 2
+
+            let rpm = rpmRange.lowerBound + phase * (rpmRange.upperBound - rpmRange.lowerBound)
+            demoReadings = demoReadings.map { reading in
+                guard reading.name == rpmName else { return reading }
+                return PIDReading(name: reading.name, shortCode: reading.shortCode, value: String(format: "%.0f", rpm), unit: reading.unit, icon: reading.icon, isFault: reading.isFault, faultReason: reading.faultReason)
+            }
+            demoSpeedMPH = phase * 70
+
+            try? await Task.sleep(for: .seconds(1.0 / 60.0))
+        }
+    }
+
+    /// Small random jitter for the non-gauge PID cards, so they still feel
+    /// "live" without competing with the sweep driving the two gauges.
+    private func runJitter() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
             demoReadings = demoReadings.map { reading in
-                guard !reading.isFault, let base = Double(reading.value) else { return reading }
+                guard reading.name != rpmName, !reading.isFault, let base = Double(reading.value) else { return reading }
                 let jittered = base * Double.random(in: 0.96...1.04)
-                let formatted = reading.unit == "RPM" ? String(format: "%.0f", jittered) : String(format: "%.1f", jittered)
-                return PIDReading(name: reading.name, shortCode: reading.shortCode, value: formatted, unit: reading.unit, icon: reading.icon, isFault: reading.isFault, faultReason: reading.faultReason)
+                return PIDReading(name: reading.name, shortCode: reading.shortCode, value: String(format: "%.1f", jittered), unit: reading.unit, icon: reading.icon, isFault: reading.isFault, faultReason: reading.faultReason)
             }
         }
     }

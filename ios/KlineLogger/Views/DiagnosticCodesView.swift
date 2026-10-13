@@ -10,15 +10,28 @@ import SwiftUI
 struct DiagnosticCodesView: View {
     var isDemo: Bool
     var connectedDeviceName: String
+    var obdEngine: OBDEngine?
     var onEnd: () -> Void
 
-    @State private var codes: [DiagnosticTroubleCode] = []
+    @State private var demoCodes: [DiagnosticTroubleCode] = []
+
+    private var codes: [DiagnosticTroubleCode] {
+        isDemo ? demoCodes : (obdEngine?.troubleCodes ?? [])
+    }
+
+    private var isReading: Bool {
+        obdEngine?.isReadingCodes ?? false
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
                     ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
+
+                    if !isDemo, obdEngine != nil {
+                        readCodesControl
+                    }
 
                     if codes.isEmpty {
                         emptyState
@@ -41,19 +54,51 @@ struct DiagnosticCodesView: View {
         }
         .task {
             if isDemo {
-                codes = DemoData.troubleCodes
+                demoCodes = DemoData.troubleCodes
+            }
+        }
+    }
+
+    private var readCodesControl: some View {
+        VStack(spacing: 8) {
+            Button {
+                Task { await obdEngine?.readTroubleCodes() }
+            } label: {
+                Label(isReading ? "Reading…" : "Read Codes", systemImage: "arrow.clockwise")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(isReading)
+
+            Text("Experimental — unlike RPM/PID reading, Kawasaki's trouble-code service isn't confirmed for this ECU. The ECU may simply refuse this request.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let error = obdEngine?.troubleCodesError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
             }
         }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: isDemo ? "checkmark.circle" : "hourglass")
+        let icon = isDemo ? "checkmark.circle" : (isReading ? "hourglass" : "questionmark.circle")
+        let title = isDemo ? "No trouble codes" : (isReading ? "Reading codes…" : "No codes read yet")
+        let subtitle = isDemo
+            ? "No fault codes are currently stored."
+            : (isReading ? "Checking the ECU for trouble codes." : "Tap Read Codes above to check the ECU.")
+        return VStack(spacing: 8) {
+            Image(systemName: icon)
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
-            Text(isDemo ? "No trouble codes" : "Trouble codes coming soon")
+            Text(title)
                 .font(.headline)
-            Text(isDemo ? "No fault codes are currently stored." : "Reading diagnostic trouble codes requires ECU protocol support, which is still in progress.")
+            Text(subtitle)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

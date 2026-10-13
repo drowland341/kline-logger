@@ -39,7 +39,7 @@ struct ContentView: View {
                     HomeView(
                         errorMessage: currentPhase.errorMessage,
                         nearbyDeviceNames: bluetoothManager.nearbyDeviceNames,
-                        technicalLog: wifiManager.handshakeLog,
+                        technicalLog: wifiManager.engine.handshakeLog,
                         onConnectWiFi: {
                             activeTransport = .wifi
                             wifiManager.connect()
@@ -60,8 +60,8 @@ struct ContentView: View {
                         connectedDeviceName: name,
                         adapterInfo: activeTransport == .bluetooth
                             ? .bluetooth(bluetoothManager.discoveredServices)
-                            : .wifi(wifiManager.handshakeLog),
-                        wifiManager: activeTransport == .wifi ? wifiManager : nil
+                            : .wifi(wifiManager.engine.handshakeLog),
+                        obdEngine: activeTransport == .wifi ? wifiManager.engine : (activeTransport == .bluetooth ? bluetoothManager.engine : nil)
                     ) {
                         disconnectActiveConnection()
                     }

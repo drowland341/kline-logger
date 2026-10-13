@@ -11,7 +11,7 @@ struct DashboardView: View {
     var isDemo: Bool
     var connectedDeviceName: String
     var adapterInfo: AdapterInfo?
-    var wifiManager: WiFiOBDManager?
+    var obdEngine: OBDEngine?
     var onEnd: () -> Void
 
     @State private var gpsManager = GPSSpeedManager()
@@ -19,17 +19,17 @@ struct DashboardView: View {
 
     var body: some View {
         TabView {
-            LivePIDsView(isDemo: isDemo, connectedDeviceName: connectedDeviceName, adapterInfo: adapterInfo, wifiManager: wifiManager, gpsManager: gpsManager, onEnd: onEnd)
+            LivePIDsView(isDemo: isDemo, connectedDeviceName: connectedDeviceName, adapterInfo: adapterInfo, obdEngine: obdEngine, gpsManager: gpsManager, onEnd: onEnd)
                 .tabItem { Label("Live Data", systemImage: "waveform.path.ecg") }
 
-            DiagnosticCodesView(isDemo: isDemo, connectedDeviceName: connectedDeviceName, onEnd: onEnd)
+            DiagnosticCodesView(isDemo: isDemo, connectedDeviceName: connectedDeviceName, obdEngine: obdEngine, onEnd: onEnd)
                 .tabItem { Label("Codes", systemImage: "exclamationmark.triangle") }
 
-            PIDScannerView(isDemo: isDemo, connectedDeviceName: connectedDeviceName, wifiManager: wifiManager, onEnd: onEnd)
+            PIDScannerView(isDemo: isDemo, connectedDeviceName: connectedDeviceName, obdEngine: obdEngine, onEnd: onEnd)
                 .tabItem { Label("PID Scan", systemImage: "magnifyingglass") }
 
-            if researchLoggingEnabled, !isDemo, let wifiManager {
-                ResearchModeView(wifiManager: wifiManager, gpsManager: gpsManager)
+            if researchLoggingEnabled, !isDemo, let obdEngine {
+                ResearchModeView(obdEngine: obdEngine, gpsManager: gpsManager)
                     .tabItem { Label("Research", systemImage: "flask") }
             }
         }

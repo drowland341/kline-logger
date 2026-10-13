@@ -4,7 +4,8 @@
     "pid: hex local identifier sent as '21 <pid>'. every: read on every Nth update (1 = every time).",
     "formula variables: A B C D... (data bytes), raw, sraw, n, d. Functions: abs min max round signed(v,bits) math.*",
     "verified: set true once a channel's scaling has been checked against a known-good reading.",
-    "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session."
+    "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session.",
+    "priority: iOS app only. true gives this channel a dedicated re-read on every other poll cycle (see OBDEngine.pollStep), for gauges that need to track faster than 'every' alone allows. Defaults to false; not used by the Windows app."
   ],
   "defaults_revision": 1,
   "pids": [
@@ -15,6 +16,7 @@
       "units": "rpm",
       "enabled": true,
       "every": 1,
+      "priority": true,
       "verified": false,
       "notes": "Was 'raw' with no scaling (unverified default). At base idle on a 2007 Ultra LX, raw read 306 while the ski's actual idle is ~1200 rpm — 306 * 4 = 1224, a close match. This ECU appears to store RPM in units of 4 rpm per count (opposite of standard OBD-II's PID 0x0C, which divides by 4). Confirmed at one data point (idle); would be good to confirm at a second RPM (e.g. a brief rev) to rule out a non-multiplicative offset.",
       "gauge_min": 0.0,

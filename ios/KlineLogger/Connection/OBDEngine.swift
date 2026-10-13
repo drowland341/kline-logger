@@ -1,24 +1,25 @@
 //
-//  WiFiOBDManager.swift
+//  OBDEngine.swift
 //  KlineLogger
 //
-//  Created by Douglas Rowland on 10/5/26.
+//  Transport-agnostic half of the Kawasaki KWP2000-over-K-line dialect
+//  (StartCommunication, StartDiagnosticSession, ReadDataByLocalIdentifier) driven
+//  through an ELM327's AT-command interface. Originally lived inside WiFiOBDManager;
+//  extracted so the exact same session/polling/scanning/watching/research-logging
+//  logic works unmodified over any ELM327Link — Wi-Fi (NWConnection) or Bluetooth
+//  (CBPeripheral characteristics) — instead of drifting between two copies.
 //
-//  Drives the Veepeak's ELM327 Wi-Fi interface in raw/custom-header mode to
-//  speak Kawasaki's KWP2000-over-K-line dialect directly (StartCommunication,
-//  StartDiagnosticSession, ReadDataByLocalIdentifier). Session sequencing and
-//  constants are ported from drowland341/kline-logger's kline.py, which was
-//  reverse-engineered against this exact ECU family using a raw K-line cable.
-//  Here the ELM327 chip handles wake-up timing, framing, and checksums; we
-//  just set its header to the KWP2000 address and send/parse service bytes.
+//  Session sequencing and constants are ported from drowland341/kline-logger's
+//  kline.py, which was reverse-engineered against this exact ECU family using a raw
+//  K-line cable. Here the ELM327 chip handles wake-up timing, framing, and
+//  checksums; this engine just sets its header to the KWP2000 address and sends/
+//  parses service bytes.
 
 import Foundation
-import Network
 import Observation
 
 @Observable
-final class WiFiOBDManager {
-    private(set) var phase: ConnectionPhase = .idle
+final class OBDEngine {
     private(set) var handshakeLog: [String] = []
     private(set) var pidReadings: [PIDReading] = []
     private(set) var scanResults: [ScannedPID] = []
@@ -40,18 +41,19 @@ final class WiFiOBDManager {
     /// priority. Set from outside (e.g. ResearchLogger); empty when Research Mode isn't active.
     var extraLoggedPIDs: [UInt8] = []
 
-    private var connection: NWConnection?
-    private var connectTimeoutTask: Task<Void, Never>?
+    /// Best-effort, unverified: Kawasaki's DTC-read service isn't documented anywhere for this
+    /// ECU family (unlike ReadDataByLocalIdentifier), so this tries the standard KWP2000 DTC
+    /// services and surfaces whatever the ECU actually says rather than guessing silently.
+    private(set) var troubleCodes: [DiagnosticTroubleCode] = []
+    private(set) var isReadingCodes = false
+    private(set) var troubleCodesError: String?
+
+    private weak var link: ELM327Link?
     private var workLoopTask: Task<Void, Never>?
+    private var onSessionFailed: ((String) -> Void)?
     private var receiveBuffer = Data()
 
-    private let host: NWEndpoint.Host = "192.168.0.10"
-    private let port: NWEndpoint.Port = 35000
-    private let connectTimeout: Duration = .seconds(30)
-    private let adapterDisplayName = "OBDCheck Wi-Fi"
-
     private let testerAddress: UInt8 = 0xF1
-    private let ecuAddressCandidates: [UInt8] = [0x11, 0x28]
     private var ecuAddress: UInt8 = 0x11
     private let requestGap: Duration = .milliseconds(55)
     private var lastRequestAt: ContinuousClock.Instant?
@@ -62,6 +64,15 @@ final class WiFiOBDManager {
     private var sweepPlan: [UInt8] = []
     private var consecutiveFailures = 0
     private let maxConsecutiveFailures = 3
+
+    /// Alternates every other work-loop tick between a direct re-read of the priority
+    /// PID(s) (Engine RPM) and the normal round-robin sweep, so RPM gets roughly half
+    /// of all bus transactions instead of splitting evenly with every other "every=1"
+    /// channel. This is the practical ceiling given the ~50ms Kawasaki bus floor (see
+    /// README Protocol notes) — we can't poll faster than the ECU tolerates, but we can
+    /// stop spending half of RPM's bus time on Throttle/Intake Pressure.
+    private var priorityTick = false
+    private var priorityIndex = 0
 
     private enum Mode {
         case polling
@@ -77,77 +88,6 @@ final class WiFiOBDManager {
         }
     }
 
-    // MARK: - Connect / disconnect
-
-    func connect() {
-        handshakeLog = []
-        pidReadings = []
-        scanResults = []
-        watchSamples = []
-        isWatching = false
-        rawValuesByPID = [:]
-        extraLoggedPIDs = []
-        sweepCounter = 0
-        sweepPlan = []
-        consecutiveFailures = 0
-        mode = .polling
-        phase = .connecting(adapterDisplayName)
-
-        let conn = NWConnection(host: host, port: port, using: .tcp)
-        connection = conn
-
-        conn.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.connectTimeoutTask?.cancel()
-                Task { await self.establishSession() }
-            case .failed(let error):
-                self.connectTimeoutTask?.cancel()
-                self.phase = .failed("Couldn't reach the adapter at \(self.host):\(self.port): \(error.localizedDescription). Make sure your phone is joined to the adapter's Wi-Fi network (usually named something like \"OBDCHECK\") in Settings.")
-            default:
-                break
-            }
-        }
-        conn.start(queue: .main)
-        armConnectTimeout()
-    }
-
-    func cancel() {
-        connectTimeoutTask?.cancel()
-        workLoopTask?.cancel()
-        connection?.cancel()
-        connection = nil
-        phase = .idle
-    }
-
-    func disconnect() {
-        workLoopTask?.cancel()
-        workLoopTask = nil
-        connection?.cancel()
-        connection = nil
-        handshakeLog = []
-        pidReadings = []
-        scanResults = []
-        watchSamples = []
-        isWatching = false
-        rawValuesByPID = [:]
-        extraLoggedPIDs = []
-        phase = .idle
-    }
-
-    private func armConnectTimeout() {
-        connectTimeoutTask?.cancel()
-        connectTimeoutTask = Task { [weak self, connectTimeout] in
-            try? await Task.sleep(for: connectTimeout)
-            guard let self, !Task.isCancelled else { return }
-            if case .connecting = self.phase {
-                self.connection?.cancel()
-                self.phase = .failed("Timed out reaching the adapter's Wi-Fi network. Make sure your phone is joined to the adapter's Wi-Fi (usually named something like \"OBDCHECK\") before connecting.")
-            }
-        }
-    }
-
     // MARK: - Session establishment
 
     /// Protocol numbers to try, in order: ISO14230-4 KWP fast init, KWP 5-baud init, then ISO9141-2.
@@ -159,7 +99,48 @@ final class WiFiOBDManager {
         ("3", "ISO 9141-2"),
     ]
 
-    private func establishSession() async {
+    /// Entry point for a transport manager once its physical link (TCP socket, BLE
+    /// characteristic pair) is open and ready to carry AT commands.
+    func start(link: ELM327Link, ecuAddressCandidates: [UInt8] = [0x11, 0x28], onEstablished: @escaping () -> Void, onFailed: @escaping (String) -> Void) {
+        reset()
+        self.link = link
+        self.onSessionFailed = onFailed
+        Task { [weak self] in
+            await self?.establishSession(ecuAddressCandidates: ecuAddressCandidates, onEstablished: onEstablished)
+        }
+    }
+
+    func stop() {
+        workLoopTask?.cancel()
+        workLoopTask = nil
+        link = nil
+        onSessionFailed = nil
+        reset()
+    }
+
+    private func reset() {
+        handshakeLog = []
+        pidReadings = []
+        scanResults = []
+        watchSamples = []
+        isWatching = false
+        isScanningPIDs = false
+        rawValuesByPID = [:]
+        extraLoggedPIDs = []
+        troubleCodes = []
+        isReadingCodes = false
+        troubleCodesError = nil
+        receiveBuffer = Data()
+        sweepCounter = 0
+        sweepPlan = []
+        consecutiveFailures = 0
+        priorityTick = false
+        priorityIndex = 0
+        mode = .polling
+        lastRequestAt = nil
+    }
+
+    private func establishSession(ecuAddressCandidates: [UInt8], onEstablished: @escaping () -> Void) async {
         do {
             try await send("ATZ")
             try await send("ATE0")
@@ -167,7 +148,7 @@ final class WiFiOBDManager {
             try await send("ATH0")
             try await send("ATST19") // cap the adapter's per-request wait at ~100ms instead of its slower default
         } catch {
-            phase = .failed("Adapter didn't respond as expected: \(error.localizedDescription)")
+            onSessionFailed?("Adapter didn't respond as expected: \(error.localizedDescription)")
             return
         }
 
@@ -205,12 +186,12 @@ final class WiFiOBDManager {
         }
 
         guard let connectedAddress else {
-            phase = .failed("No response from the ECU after trying \(protocolCandidates.count) protocol variants and both known ECU addresses. Make sure the ignition is on (or in accessory mode) and try again. Check Nearby/Technical details below for exactly what the adapter said.")
+            onSessionFailed?("No response from the ECU after trying \(protocolCandidates.count) protocol variants and \(ecuAddressCandidates.count) known ECU addresses. Make sure the ignition is on (or in accessory mode) and try again. Check Nearby/Technical details below for exactly what the adapter said.")
             return
         }
         ecuAddress = connectedAddress
 
-        phase = .connected(adapterDisplayName)
+        onEstablished()
         startWorkLoop()
     }
 
@@ -248,6 +229,15 @@ final class WiFiOBDManager {
     }
 
     private func pollStep() async {
+        priorityTick.toggle()
+        let priorityDefs = PIDLibrary.all.filter { $0.enabled && $0.priority }
+        if priorityTick, !priorityDefs.isEmpty {
+            let def = priorityDefs[priorityIndex % priorityDefs.count]
+            priorityIndex += 1
+            await pollOne(def)
+            return
+        }
+
         if sweepPlan.isEmpty {
             sweepCounter += 1
             sweepPlan = PIDLibrary.all
@@ -271,10 +261,14 @@ final class WiFiOBDManager {
             return
         }
 
+        await pollOne(def)
+    }
+
+    private func pollOne(_ def: PIDDefinition) async {
         do {
-            let data = try await readLocalID(pid)
+            let data = try await readLocalID(def.pid)
             consecutiveFailures = 0
-            rawValuesByPID[pid] = data
+            rawValuesByPID[def.pid] = data
             updateReading(for: def, data: data, error: nil)
         } catch let error as NegativeResponseError {
             consecutiveFailures = 0
@@ -284,9 +278,9 @@ final class WiFiOBDManager {
             updateReading(for: def, data: nil, error: error.localizedDescription)
             if consecutiveFailures >= maxConsecutiveFailures {
                 workLoopTask?.cancel()
-                connection?.cancel()
-                connection = nil
-                phase = .failed("Lost contact with the ECU. If the ski shut itself off, cycle the key and reconnect.")
+                let onFailed = onSessionFailed
+                link = nil
+                onFailed?("Lost contact with the ECU. If the ski shut itself off, cycle the key and reconnect.")
             }
         }
     }
@@ -400,23 +394,92 @@ final class WiFiOBDManager {
     private func readLocalID(_ pid: UInt8) async throws -> [UInt8] {
         let response = try await send("21" + String(format: "%02X", pid))
         let bytes = try Self.parseHexBytes(response)
-        guard !bytes.isEmpty else { throw WiFiOBDError.malformedResponse(response) }
+        guard !bytes.isEmpty else { throw OBDLinkError.malformedResponse(response) }
         if bytes[0] == 0x7F {
             let sid: UInt8 = bytes.count > 1 ? bytes[1] : 0x21
             let nrc: UInt8 = bytes.count > 2 ? bytes[2] : 0
             throw NegativeResponseError(sid: sid, nrc: nrc)
         }
         guard bytes.count >= 2, bytes[0] == 0x61, bytes[1] == pid else {
-            throw WiFiOBDError.malformedResponse(response)
+            throw OBDLinkError.malformedResponse(response)
         }
         return Array(bytes[2...])
+    }
+
+    // MARK: - Trouble codes (best-effort, unverified — see header comment)
+
+    /// Standard OBD-II/KWP2000 two-byte DTC encoding: top 2 bits of the high byte pick the
+    /// letter (P/C/B/U), next 2 bits are the first digit, and the remaining 20 bits (4 from
+    /// the high byte + 8 from the low byte) render as 3 more hex digits.
+    private static func decodeDTC(_ high: UInt8, _ low: UInt8) -> String {
+        let letters = ["P", "C", "B", "U"]
+        let letter = letters[Int(high >> 6) & 0x3]
+        let firstDigit = (high >> 4) & 0x3
+        let rest = (UInt16(high & 0x0F) << 8) | UInt16(low)
+        return String(format: "%@%d%03X", letter, firstDigit, rest)
+    }
+
+    private static func parseDTCResponse(_ bytes: [UInt8], requestSID: UInt8) throws -> [DiagnosticTroubleCode] {
+        guard !bytes.isEmpty else { throw OBDLinkError.malformedResponse("empty response") }
+        if bytes[0] == 0x7F {
+            let sid: UInt8 = bytes.count > 1 ? bytes[1] : requestSID
+            let nrc: UInt8 = bytes.count > 2 ? bytes[2] : 0
+            throw NegativeResponseError(sid: sid, nrc: nrc)
+        }
+        guard bytes[0] == requestSID &+ 0x40 else {
+            throw OBDLinkError.malformedResponse(Self.hexString(bytes))
+        }
+        guard bytes.count >= 2 else { return [] }
+        let count = Int(bytes[1])
+        var codes: [DiagnosticTroubleCode] = []
+        var i = 2
+        for _ in 0..<count {
+            guard i + 2 < bytes.count else { break }
+            let high = bytes[i], low = bytes[i + 1], status = bytes[i + 2]
+            codes.append(DiagnosticTroubleCode(
+                code: decodeDTC(high, low),
+                description: "Status byte 0x\(String(format: "%02X", status)) — decode unverified against this ECU.",
+                isActive: status & 0x01 != 0
+            ))
+            i += 3
+        }
+        return codes
+    }
+
+    /// Tries KWP2000's two standard DTC-read services in turn (0x18 ReadDiagnosticTroubleCodesByStatus,
+    /// then 0x17 ReadStatusOfDiagnosticTroubleCodes as a fallback). Neither is documented anywhere for
+    /// this Kawasaki ECU family — ReadDataByLocalIdentifier (0x21) is the only confirmed service — so
+    /// either attempt may simply be refused. That's an acceptable, correctly-surfaced outcome here.
+    func readTroubleCodes() async {
+        isReadingCodes = true
+        defer { isReadingCodes = false }
+
+        let attempts: [(sid: UInt8, request: String)] = [
+            (0x18, "18FF00FF"),
+            (0x17, "17FF"),
+        ]
+
+        for attempt in attempts {
+            do {
+                let response = try await send(attempt.request)
+                let bytes = try Self.parseHexBytes(response)
+                troubleCodes = try Self.parseDTCResponse(bytes, requestSID: attempt.sid)
+                troubleCodesError = nil
+                return
+            } catch let error as NegativeResponseError {
+                troubleCodesError = "ECU refused service 0x\(String(format: "%02X", attempt.sid)): \(error.nrcName)."
+            } catch {
+                troubleCodesError = "Service 0x\(String(format: "%02X", attempt.sid)) failed: \(error.localizedDescription)."
+            }
+        }
+        troubleCodes = []
     }
 
     // MARK: - Low-level AT/TCP transport
 
     @discardableResult
     private func send(_ command: String) async throws -> String {
-        guard let connection else { throw WiFiOBDError.notConnected }
+        guard let link else { throw OBDLinkError.notConnected }
 
         if let lastRequestAt {
             let elapsed = clock.now - lastRequestAt
@@ -426,15 +489,7 @@ final class WiFiOBDManager {
         }
 
         let data = (command + "\r").data(using: .ascii) ?? Data()
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: data, completion: .contentProcessed { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            })
-        }
+        try await link.write(data)
 
         let response = try await receiveUntilPrompt()
         lastRequestAt = clock.now
@@ -453,17 +508,9 @@ final class WiFiOBDManager {
                 return text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
 
-            guard let connection else { throw WiFiOBDError.notConnected }
-            let chunk = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-                connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume(returning: data ?? Data())
-                    }
-                }
-            }
-            if chunk.isEmpty { throw WiFiOBDError.connectionClosed }
+            guard let link else { throw OBDLinkError.notConnected }
+            let chunk = try await link.nextIncomingChunk()
+            if chunk.isEmpty { throw OBDLinkError.connectionClosed }
             receiveBuffer.append(chunk)
         }
     }
@@ -483,7 +530,7 @@ final class WiFiOBDManager {
         if let busInitRange = remaining.range(of: "BUS INIT:", options: .caseInsensitive) {
             let after = remaining[busInitRange.upperBound...]
             if after.range(of: "ERROR", options: .caseInsensitive) != nil {
-                throw WiFiOBDError.elmReported(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                throw OBDLinkError.elmReported(text.trimmingCharacters(in: .whitespacesAndNewlines))
             }
             if let okRange = after.range(of: "OK", options: .caseInsensitive) {
                 remaining = after[okRange.upperBound...]
@@ -495,18 +542,18 @@ final class WiFiOBDManager {
         let upper = remaining.uppercased()
         let knownErrors = ["NO DATA", "UNABLE TO CONNECT", "ERROR", "STOPPED", "CAN ERROR", "?", "SEARCHING"]
         for marker in knownErrors where upper.contains(marker) {
-            throw WiFiOBDError.elmReported(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw OBDLinkError.elmReported(text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let hexOnly = upper.filter { $0.isHexDigit }
         guard !hexOnly.isEmpty, hexOnly.count % 2 == 0 else {
-            throw WiFiOBDError.malformedResponse(text)
+            throw OBDLinkError.malformedResponse(text)
         }
         var bytes: [UInt8] = []
         let chars = Array(hexOnly)
         var i = 0
         while i < chars.count {
             let pair = String(chars[i...i + 1])
-            guard let byte = UInt8(pair, radix: 16) else { throw WiFiOBDError.malformedResponse(text) }
+            guard let byte = UInt8(pair, radix: 16) else { throw OBDLinkError.malformedResponse(text) }
             bytes.append(byte)
             i += 2
         }
@@ -538,7 +585,7 @@ struct NegativeResponseError: Error, LocalizedError {
     }
 }
 
-enum WiFiOBDError: LocalizedError {
+enum OBDLinkError: LocalizedError {
     case notConnected
     case connectionClosed
     case elmReported(String)
