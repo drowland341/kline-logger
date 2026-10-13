@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="96" alt=""></p>
+
 # K-line Logger (iOS)
 
 A SwiftUI iOS app for live data and diagnostics from Kawasaki personal watercraft, built around a Veepeak OBDCheck Wi-Fi (ELM327) adapter. It drives the same Kawasaki KWP2000-over-K-line dialect as the Windows app in this repo (`StartCommunication`, `StartDiagnosticSession`, `ReadDataByLocalIdentifier`), but through the ELM327's AT-command interface over Wi-Fi instead of a raw K-line serial cable.
