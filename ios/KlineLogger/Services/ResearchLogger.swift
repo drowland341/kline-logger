@@ -49,6 +49,7 @@ final class ResearchLogger {
         rows = []
         knownChannelNames = PIDLibrary.all.filter(\.enabled).map(\.name)
         obdEngine.extraLoggedPIDs = extraPIDs
+        obdEngine.isResearchLogging = true
         sessionStart = Date()
         openFile(extraPIDs: extraPIDs)
         isLogging = true
@@ -66,6 +67,7 @@ final class ResearchLogger {
         task = nil
         isLogging = false
         obdEngine?.extraLoggedPIDs = []
+        obdEngine?.isResearchLogging = false
         closeFile()
     }
 

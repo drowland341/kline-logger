@@ -50,6 +50,22 @@ final class OBDEngine {
     private(set) var isReadingCodes = false
     private(set) var troubleCodesError: String?
 
+    /// Set by ResearchLogger while a log is running. Along with isScanningPIDs/isWatching/
+    /// isReadingCodes, feeds `isBusy` so views can grey out actions that would otherwise
+    /// contend for the bus with whatever's already in control of it.
+    var isResearchLogging = false
+
+    /// True while anything other than plain background polling owns the bus — a scan, a
+    /// watch session, a trouble-code read, or a research log. Views use this to disable
+    /// buttons that would start a second, conflicting activity: scanning and watching are
+    /// already serialized through `mode` below, but a research log doesn't touch `mode` at
+    /// all (it just rides along on normal polling), so without this flag it's possible to
+    /// e.g. start a trouble-code read mid-log and get a confusing gap in the CSV, or start a
+    /// scan that starves the log of fresh readings for its ~15-20s duration.
+    var isBusy: Bool {
+        isScanningPIDs || isWatching || isReadingCodes || isResearchLogging
+    }
+
     private weak var link: ELM327Link?
     private var workLoopTask: Task<Void, Never>?
     private var onSessionFailed: ((String) -> Void)?
@@ -85,9 +101,11 @@ final class OBDEngine {
         case polling
         case scanning(remaining: [UInt8])
         case watching(pids: [UInt8])
+        case readingCodes
     }
     private var mode: Mode = .polling
     private var watchIndex = 0
+    private var codesCompletion: (() -> Void)?
 
     init() {
         for def in PIDLibrary.all {
@@ -137,6 +155,8 @@ final class OBDEngine {
         troubleCodes = []
         isReadingCodes = false
         troubleCodesError = nil
+        isResearchLogging = false
+        codesCompletion = nil
         receiveBuffer = Data()
         sweepCounter = 0
         sweepPlan = []
@@ -236,6 +256,8 @@ final class OBDEngine {
             await scanStep(pid: pid)
         case .watching(let pids):
             await watchStep(pids: pids)
+        case .readingCodes:
+            await readCodesStep()
         }
     }
 
@@ -314,6 +336,7 @@ final class OBDEngine {
     /// can safely chain into logic that depends on `scanResults` being complete (e.g. starting a
     /// research log against everything that responded).
     func startScan(range: ClosedRange<UInt8> = 0x00...0xFF, onComplete: (() -> Void)? = nil) {
+        guard !isBusy else { return }
         scanResults = []
         isScanningPIDs = true
         scanCompletion = onComplete
@@ -329,6 +352,7 @@ final class OBDEngine {
     /// "Watch" mode: continuously re-reads just a handful of chosen PIDs (fast cycle, since there
     /// are so few) and tracks low/high so you can wiggle a sensor and see which address moves.
     func startWatching(pids: [UInt8]) {
+        guard !isBusy else { return }
         watchSamples = []
         watchIndex = 0
         isWatching = true
@@ -467,9 +491,31 @@ final class OBDEngine {
     /// then 0x17 ReadStatusOfDiagnosticTroubleCodes as a fallback). Neither is documented anywhere for
     /// this Kawasaki ECU family — ReadDataByLocalIdentifier (0x21) is the only confirmed service — so
     /// either attempt may simply be refused. That's an acceptable, correctly-surfaced outcome here.
+    /// Routed through `mode` (like scanning/watching) rather than firing its own Task, so it
+    /// can never run while the work loop is mid-poll/scan/watch and racing the same `send()`/
+    /// `receiveBuffer` — which previously could and did (this was the source of crashes when
+    /// reading codes while a scan or research log was active).
     func readTroubleCodes() async {
+        guard !isBusy else {
+            troubleCodesError = "Can't read codes while a scan, watch, or research log is active. Stop it first."
+            return
+        }
         isReadingCodes = true
-        defer { isReadingCodes = false }
+        troubleCodesError = nil
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            codesCompletion = { continuation.resume() }
+            mode = .readingCodes
+        }
+    }
+
+    private func readCodesStep() async {
+        defer {
+            isReadingCodes = false
+            mode = .polling
+            let completion = codesCompletion
+            codesCompletion = nil
+            completion?()
+        }
 
         let attempts: [(sid: UInt8, request: String)] = [
             (0x18, "18FF00FF"),
