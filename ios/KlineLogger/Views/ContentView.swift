@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var wifiManager = WiFiOBDManager()
     @State private var bluetoothManager = BluetoothManager()
     @State private var isDemoMode = false
+    @State private var isBrowsingWithoutConnecting = false
     @State private var activeTransport: ActiveTransport = .none
 
     private var currentPhase: ConnectionPhase {
@@ -33,6 +34,23 @@ struct ContentView: View {
                 DashboardView(isDemo: true, connectedDeviceName: "Demo Adapter") {
                     isDemoMode = false
                 }
+            } else if isBrowsingWithoutConnecting {
+                DashboardView(
+                    isDemo: false,
+                    connectedDeviceName: "",
+                    onConnectWiFi: {
+                        isBrowsingWithoutConnecting = false
+                        activeTransport = .wifi
+                        wifiManager.connect()
+                    },
+                    onConnectBluetooth: {
+                        isBrowsingWithoutConnecting = false
+                        activeTransport = .bluetooth
+                        bluetoothManager.connect()
+                    }
+                ) {
+                    isBrowsingWithoutConnecting = false
+                }
             } else {
                 switch currentPhase {
                 case .idle, .failed:
@@ -48,7 +66,8 @@ struct ContentView: View {
                             activeTransport = .bluetooth
                             bluetoothManager.connect()
                         },
-                        onDemo: { isDemoMode = true }
+                        onDemo: { isDemoMode = true },
+                        onBrowse: { isBrowsingWithoutConnecting = true }
                     )
                 case .scanning, .connecting:
                     ConnectingView(statusText: currentPhase.statusText) {
@@ -70,6 +89,7 @@ struct ContentView: View {
         }
         .tint(.cyan)
         .animation(.default, value: isDemoMode)
+        .animation(.default, value: isBrowsingWithoutConnecting)
     }
 
     private func cancelActiveConnection() {

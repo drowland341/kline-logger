@@ -11,9 +11,12 @@ struct DiagnosticCodesView: View {
     var isDemo: Bool
     var connectedDeviceName: String
     var obdEngine: OBDEngine?
+    var onConnectWiFi: () -> Void = {}
+    var onConnectBluetooth: () -> Void = {}
     var onEnd: () -> Void
 
     @State private var demoCodes: [DiagnosticTroubleCode] = []
+    @State private var isShowingSettings = false
 
     private var codes: [DiagnosticTroubleCode] {
         isDemo ? demoCodes : (obdEngine?.troubleCodes ?? [])
@@ -23,13 +26,21 @@ struct DiagnosticCodesView: View {
         obdEngine?.isReadingCodes ?? false
     }
 
+    private var isBusyElsewhere: Bool {
+        (obdEngine?.isBusy ?? false) && !isReading
+    }
+
+    private var isConnected: Bool {
+        isDemo || obdEngine != nil
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
+                    ConnectionStatusBanner(isDemo: isDemo, isConnected: isConnected, connectedDeviceName: connectedDeviceName)
 
-                    if !isDemo, obdEngine != nil {
+                    if !isDemo {
                         readCodesControl
                     }
 
@@ -47,9 +58,24 @@ struct DiagnosticCodesView: View {
             }
             .navigationTitle("Trouble Codes")
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(isDemo ? "End Demo" : "Disconnect", role: .destructive, action: onEnd)
+                if !isConnected {
+                    ToolbarItem(placement: .topBarLeading) {
+                        ConnectMenu(onConnectWiFi: onConnectWiFi, onConnectBluetooth: onConnectBluetooth)
+                    }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isShowingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(isDemo ? "End Demo" : (obdEngine != nil ? "Disconnect" : "Exit"), role: isConnected ? .destructive : nil, action: onEnd)
+                }
+            }
+            .sheet(isPresented: $isShowingSettings) {
+                SettingsView()
             }
         }
         .task {
@@ -70,9 +96,13 @@ struct DiagnosticCodesView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(isReading)
+            .disabled(obdEngine == nil || isReading || isBusyElsewhere)
 
-            Text("Experimental — unlike RPM/PID reading, Kawasaki's trouble-code service isn't confirmed for this ECU. The ECU may simply refuse this request.")
+            Text(obdEngine == nil
+                 ? "Connect to an adapter to read trouble codes."
+                 : (isBusyElsewhere
+                    ? "Disabled while a PID scan, watch, or research log is running — stop it first to read codes."
+                    : "Experimental — unlike RPM/PID reading, Kawasaki's trouble-code service isn't confirmed for this ECU. The ECU may simply refuse this request."))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -144,6 +174,6 @@ private struct DTCRow: View {
     DiagnosticCodesView(isDemo: true, connectedDeviceName: "", onEnd: {})
 }
 
-#Preview("Connected, no protocol yet") {
-    DiagnosticCodesView(isDemo: false, connectedDeviceName: "Veepeak OBDCheck BLE", onEnd: {})
+#Preview("Browsing Without Connecting") {
+    DiagnosticCodesView(isDemo: false, connectedDeviceName: "", onEnd: {})
 }

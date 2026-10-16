@@ -14,11 +14,42 @@ struct HomeView: View {
     var onConnectWiFi: () -> Void
     var onConnectBluetooth: () -> Void
     var onDemo: () -> Void
+    var onBrowse: () -> Void
 
     @State private var isShowingSettings = false
 
     var body: some View {
         VStack(spacing: 32) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button(action: onConnectWiFi) {
+                        Label("Connect", systemImage: "wifi")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button(action: onConnectBluetooth) {
+                        Text("Use Bluetooth Instead")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    isShowingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+
             Spacer()
 
             VStack(spacing: 16) {
@@ -81,8 +112,8 @@ struct HomeView: View {
             Spacer()
 
             VStack(spacing: 12) {
-                Button(action: onConnectWiFi) {
-                    Label("Connect to Adapter", systemImage: "wifi")
+                Button(action: onBrowse) {
+                    Label("Dashboard", systemImage: "square.grid.2x2")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                 }
@@ -96,29 +127,11 @@ struct HomeView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-
-                Button(action: onConnectBluetooth) {
-                    Text("Use Bluetooth Instead")
-                        .font(.footnote)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .topTrailing) {
-            Button {
-                isShowingSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .padding(12)
-            }
-        }
         .sheet(isPresented: $isShowingSettings) {
             SettingsView()
         }
@@ -126,7 +139,7 @@ struct HomeView: View {
 }
 
 #Preview {
-    HomeView(errorMessage: nil, onConnectWiFi: {}, onConnectBluetooth: {}, onDemo: {})
+    HomeView(errorMessage: nil, onConnectWiFi: {}, onConnectBluetooth: {}, onDemo: {}, onBrowse: {})
 }
 
 #Preview("With Error") {
@@ -134,7 +147,8 @@ struct HomeView: View {
         errorMessage: "Timed out reaching the adapter's Wi-Fi network. Make sure your phone is joined to the adapter's Wi-Fi (usually named something like \"OBDCHECK\") before connecting.",
         onConnectWiFi: {},
         onConnectBluetooth: {},
-        onDemo: {}
+        onDemo: {},
+        onBrowse: {}
     )
 }
 
@@ -144,7 +158,8 @@ struct HomeView: View {
         nearbyDeviceNames: ["OBDII", "JBL Flip 5", "Unknown"],
         onConnectWiFi: {},
         onConnectBluetooth: {},
-        onDemo: {}
+        onDemo: {},
+        onBrowse: {}
     )
 }
 
@@ -161,6 +176,7 @@ struct HomeView: View {
         ],
         onConnectWiFi: {},
         onConnectBluetooth: {},
-        onDemo: {}
+        onDemo: {},
+        onBrowse: {}
     )
 }

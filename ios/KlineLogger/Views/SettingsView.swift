@@ -9,6 +9,9 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("researchLoggingEnabled") private var researchLoggingEnabled = false
+    @AppStorage("temperatureUnit") private var temperatureUnit: TemperatureUnit = .fahrenheit
+    @AppStorage("pressureUnit") private var pressureUnit: PressureUnit = .inHg
+    @AppStorage("speedUnit") private var speedUnit: SpeedUnit = .mph
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -31,6 +34,21 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                }
+
+                Section {
+                    NavigationLink {
+                        UnitsSettingsView()
+                    } label: {
+                        HStack {
+                            Text("Units")
+                            Spacer()
+                            Text("\(temperatureUnit.symbol) · \(pressureUnit.symbol) · \(speedUnit.symbol)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } footer: {
+                    Text("Controls how temperature, pressure, and GPS speed are displayed on Live Data. Raw ECU values and Research Mode CSV exports always stay in their native units so logs are comparable across sessions.")
                 }
 
                 Section {

@@ -15,6 +15,8 @@ struct LivePIDsView: View {
     var adapterInfo: AdapterInfo?
     var obdEngine: OBDEngine?
     var gpsManager: GPSSpeedManager = GPSSpeedManager()
+    var onConnectWiFi: () -> Void = {}
+    var onConnectBluetooth: () -> Void = {}
     var onEnd: () -> Void
 
     @State private var demoReadings: [PIDReading] = []
@@ -22,10 +24,28 @@ struct LivePIDsView: View {
     @State private var sweepTask: Task<Void, Never>?
     @State private var jitterTask: Task<Void, Never>?
     @State private var isShowingAdapterInfo = false
+    @State private var isShowingSettings = false
     @State private var isLandscape = false
+    @AppStorage("speedUnit") private var speedUnit: SpeedUnit = .mph
+
+    /// True once there's a live data source for ECU-backed readings (RPM, PID cards) — demo
+    /// mode counts as "connected" for display purposes. False while browsing the dashboard
+    /// without an adapter, in which case only GPS Speed has anything to show.
+    private var isConnected: Bool {
+        isDemo || obdEngine != nil
+    }
 
     private var readings: [PIDReading] {
-        isDemo ? demoReadings : (obdEngine?.pidReadings ?? [])
+        if isDemo { return demoReadings }
+        if let obdEngine { return obdEngine.pidReadings }
+        return Self.placeholderReadings
+    }
+
+    /// Shown in place of live readings while browsing the dashboard without an adapter —
+    /// same channels, cards, and layout a real connection would show, just zeroed out
+    /// instead of hidden behind a blocking "not connected" screen.
+    private static let placeholderReadings: [PIDReading] = PIDLibrary.all.filter(\.enabled).map { def in
+        PIDReading(name: def.name, shortCode: String(format: "0x%02X", def.pid), value: "0", unit: def.units, icon: def.icon, isFault: false, faultReason: nil)
     }
 
     private var cardReadings: [PIDReading] {
@@ -50,7 +70,7 @@ struct LivePIDsView: View {
                 let currentlyLandscape = outerGeo.size.width > outerGeo.size.height
                 ScrollView {
                     VStack(spacing: 12) {
-                        ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName, compact: currentlyLandscape)
+                        ConnectionStatusBanner(isDemo: isDemo, isConnected: isConnected, connectedDeviceName: connectedDeviceName, compact: currentlyLandscape)
 
                         gaugesSection(containerSize: outerGeo.size)
 
@@ -79,9 +99,24 @@ struct LivePIDsView: View {
                         Button("Adapter Info") { isShowingAdapterInfo = true }
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button(isDemo ? "End Demo" : "Disconnect", role: .destructive, action: onEnd)
+                if !isConnected {
+                    ToolbarItem(placement: .topBarLeading) {
+                        ConnectMenu(onConnectWiFi: onConnectWiFi, onConnectBluetooth: onConnectBluetooth)
+                    }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isShowingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(isDemo ? "End Demo" : (obdEngine != nil ? "Disconnect" : "Exit"), role: isConnected ? .destructive : nil, action: onEnd)
+                }
+            }
+            .sheet(isPresented: $isShowingSettings) {
+                SettingsView()
             }
             .sheet(isPresented: $isShowingAdapterInfo) {
                 if let adapterInfo {
@@ -121,12 +156,13 @@ struct LivePIDsView: View {
 
     private var speedGauge: some View {
         let speedMPH: Double? = isDemo ? demoSpeedMPH : gpsManager.speedMPH
+        let displaySpeed = speedMPH.map { UnitDisplay.speed(mphValue: $0, unit: speedUnit) }
         return RadialGaugeView(
-            value: speedMPH ?? 0,
-            range: 0...70,
+            value: displaySpeed ?? 0,
+            range: 0...UnitDisplay.speed(mphValue: 70, unit: speedUnit),
             title: "GPS Speed",
-            unit: "mph",
-            valueText: speedMPH.map { String(format: "%.1f", $0) } ?? "—",
+            unit: speedUnit.symbol,
+            valueText: displaySpeed.map { String(format: "%.1f", $0) } ?? "—",
             tickCount: 14,
             colorZones: GaugeColorStop.flat()
         )
@@ -182,7 +218,7 @@ struct LivePIDsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(gpsManager.speedMPH.map { String(format: "%.1f mph", $0) } ?? "no GPS fix")
+                Text(gpsManager.speedMPH.map { String(format: "%.1f \(speedUnit.symbol)", UnitDisplay.speed(mphValue: $0, unit: speedUnit)) } ?? "no GPS fix")
                     .font(.body.monospacedDigit())
             }
 
@@ -215,26 +251,16 @@ struct LivePIDsView: View {
         return "\(hex)  (\(decimal))"
     }
 
+    /// Only reachable while genuinely connected but still waiting on the first sweep —
+    /// browsing without an adapter shows `placeholderReadings` instead of this.
     private var emptyState: some View {
         VStack(spacing: 8) {
-            if obdEngine != nil {
-                ProgressView()
-                Text("Reading the ECU…")
-                    .font(.headline)
-                Text("Waiting on the first full sweep of PIDs.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "questionmark.circle")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
-                Text("No data source connected")
-                    .font(.headline)
-                Text("This shouldn't normally happen while connected — try disconnecting and reconnecting.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            ProgressView()
+            Text("Reading the ECU…")
+                .font(.headline)
+            Text("Waiting on the first full sweep of PIDs.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 60)
@@ -283,6 +309,12 @@ struct LivePIDsView: View {
 
 private struct PIDCard: View {
     let reading: PIDReading
+    @AppStorage("temperatureUnit") private var temperatureUnit: TemperatureUnit = .fahrenheit
+    @AppStorage("pressureUnit") private var pressureUnit: PressureUnit = .inHg
+
+    private var displayed: (value: String, unit: String) {
+        UnitDisplay.convert(value: reading.value, unit: reading.unit, temperature: temperatureUnit, pressure: pressureUnit)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -306,7 +338,7 @@ private struct PIDCard: View {
                     .foregroundStyle(.red)
                     .lineLimit(2)
             } else {
-                Text("\(reading.value) \(reading.unit)")
+                Text("\(displayed.value) \(displayed.unit)")
                     .font(.title3.monospacedDigit().weight(.semibold))
             }
         }
@@ -324,6 +356,6 @@ private struct PIDCard: View {
     LivePIDsView(isDemo: true, connectedDeviceName: "", onEnd: {})
 }
 
-#Preview("Connected, no protocol yet") {
-    LivePIDsView(isDemo: false, connectedDeviceName: "Veepeak OBDCheck BLE", onEnd: {})
+#Preview("Browsing Without Connecting") {
+    LivePIDsView(isDemo: false, connectedDeviceName: "", onEnd: {})
 }

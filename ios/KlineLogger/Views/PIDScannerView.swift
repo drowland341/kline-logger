@@ -11,12 +11,15 @@ struct PIDScannerView: View {
     var isDemo: Bool
     var connectedDeviceName: String
     var obdEngine: OBDEngine?
+    var onConnectWiFi: () -> Void = {}
+    var onConnectBluetooth: () -> Void = {}
     var onEnd: () -> Void
 
     @State private var demoResults: [ScannedPID] = []
     @State private var isDemoScanning = false
     @State private var scanTask: Task<Void, Never>?
     @State private var selectedPIDs: Set<UInt8> = []
+    @State private var isShowingSettings = false
 
     private var results: [ScannedPID] {
         isDemo ? demoResults : (obdEngine?.scanResults ?? [])
@@ -28,6 +31,14 @@ struct PIDScannerView: View {
 
     private var isWatching: Bool {
         obdEngine?.isWatching ?? false
+    }
+
+    private var isBusyElsewhere: Bool {
+        !isDemo && (obdEngine?.isBusy ?? false) && !isScanning && !isWatching
+    }
+
+    private var isConnected: Bool {
+        isDemo || obdEngine != nil
     }
 
     private var totalCandidates: Double {
@@ -47,38 +58,34 @@ struct PIDScannerView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    ConnectionStatusBanner(isDemo: isDemo, connectedDeviceName: connectedDeviceName)
+                    ConnectionStatusBanner(isDemo: isDemo, isConnected: isConnected, connectedDeviceName: connectedDeviceName)
 
-                    if isDemo || obdEngine != nil {
-                        if isWatching {
-                            watchPanel
-                        } else {
-                            scanControl
+                    if isWatching {
+                        watchPanel
+                    } else {
+                        scanControl
 
-                            if !isDemo, !isScanning, respondingAddresses.count > 1 {
-                                selectAllButton
-                            }
+                        if !isDemo, !isScanning, respondingAddresses.count > 1 {
+                            selectAllButton
+                        }
 
-                            if !selectedPIDs.isEmpty {
-                                watchSelectedButton
-                            }
+                        if !selectedPIDs.isEmpty {
+                            watchSelectedButton
+                        }
 
-                            if !results.isEmpty {
-                                VStack(spacing: 8) {
-                                    ForEach(results) { result in
-                                        ScanResultRow(
-                                            result: result,
-                                            isSelectable: !isDemo && result.didRespond,
-                                            isSelected: selectedPIDs.contains(address(from: result.address) ?? 0xFF)
-                                        ) {
-                                            toggleSelection(result.address)
-                                        }
+                        if !results.isEmpty {
+                            VStack(spacing: 8) {
+                                ForEach(results) { result in
+                                    ScanResultRow(
+                                        result: result,
+                                        isSelectable: !isDemo && result.didRespond,
+                                        isSelected: selectedPIDs.contains(address(from: result.address) ?? 0xFF)
+                                    ) {
+                                        toggleSelection(result.address)
                                     }
                                 }
                             }
                         }
-                    } else {
-                        notAvailableState
                     }
                 }
                 .padding()
@@ -92,30 +99,29 @@ struct PIDScannerView: View {
                         }
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button(isDemo ? "End Demo" : "Disconnect", role: .destructive, action: onEnd)
+                if !isConnected {
+                    ToolbarItem(placement: .topBarLeading) {
+                        ConnectMenu(onConnectWiFi: onConnectWiFi, onConnectBluetooth: onConnectBluetooth)
+                    }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isShowingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(isDemo ? "End Demo" : (obdEngine != nil ? "Disconnect" : "Exit"), role: isConnected ? .destructive : nil, action: onEnd)
+                }
+            }
+            .sheet(isPresented: $isShowingSettings) {
+                SettingsView()
             }
         }
         .onDisappear {
             scanTask?.cancel()
         }
-    }
-
-    private var notAvailableState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "questionmark.circle")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("No data source connected")
-                .font(.headline)
-            Text("This shouldn't normally happen while connected — try disconnecting and reconnecting.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 60)
     }
 
     private var scanControl: some View {
@@ -127,10 +133,20 @@ struct PIDScannerView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(isScanning)
+            .disabled((!isDemo && obdEngine == nil) || isScanning || isBusyElsewhere)
 
-            if isScanning {
+            if !isDemo, obdEngine == nil {
+                Text("Connect to an adapter to scan PIDs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else if isScanning {
                 ProgressView(value: Double(results.count), total: totalCandidates)
+            } else if isBusyElsewhere {
+                Text("Disabled while reading codes or logging in Research Mode — stop it first to scan.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             } else if !isDemo {
                 Text("Checks every local identifier from 0x00 to 0xFF against the ECU (about 15-20 seconds). Tap a responded row to select it, then Watch to see its value live and figure out what it measures.")
                     .font(.caption)
@@ -168,6 +184,7 @@ struct PIDScannerView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
+        .disabled(isBusyElsewhere)
     }
 
     private var watchPanel: some View {
@@ -331,6 +348,6 @@ private struct WatchSampleRow: View {
     PIDScannerView(isDemo: true, connectedDeviceName: "", onEnd: {})
 }
 
-#Preview("Connected, no protocol yet") {
-    PIDScannerView(isDemo: false, connectedDeviceName: "Veepeak OBDCheck BLE", onEnd: {})
+#Preview("Browsing Without Connecting") {
+    PIDScannerView(isDemo: false, connectedDeviceName: "", onEnd: {})
 }

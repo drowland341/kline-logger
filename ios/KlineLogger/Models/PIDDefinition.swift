@@ -50,6 +50,18 @@ struct PIDDefinition: Codable {
         gaugeMax = try c.decodeIfPresent(Double.self, forKey: .gaugeMax)
         priority = try c.decodeIfPresent(Bool.self, forKey: .priority) ?? false
     }
+
+    /// SF Symbol chosen from `units` — shared by live readings (OBDEngine) and the
+    /// placeholder readings shown when Live Data is browsed without an adapter.
+    var icon: String {
+        let u = units.lowercased()
+        if u.contains("rpm") { return "gauge.with.dots.needle.67percent" }
+        if u == "%" { return "gauge.medium" }
+        if u.contains("kpa") || u.contains("psi") { return "wind" }
+        if u.contains("°") { return "thermometer" }
+        if u == "v" { return "bolt.fill" }
+        return "waveform.path.ecg"
+    }
 }
 
 private struct PIDDefinitionFile: Codable {

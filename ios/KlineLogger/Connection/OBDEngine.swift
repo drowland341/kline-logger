@@ -395,15 +395,15 @@ final class OBDEngine {
                 do {
                     let vars = PIDByteDecoding.variables(from: data)
                     let value = try formula.evaluate(variables: vars)
-                    reading = PIDReading(name: def.name, shortCode: shortCode, value: Self.formatValue(value), unit: def.units, icon: Self.icon(for: def), isFault: false, faultReason: nil)
+                    reading = PIDReading(name: def.name, shortCode: shortCode, value: Self.formatValue(value), unit: def.units, icon: def.icon, isFault: false, faultReason: nil)
                 } catch {
-                    reading = PIDReading(name: def.name, shortCode: shortCode, value: "—", unit: "", icon: Self.icon(for: def), isFault: true, faultReason: "formula error: \(error.localizedDescription)")
+                    reading = PIDReading(name: def.name, shortCode: shortCode, value: "—", unit: "", icon: def.icon, isFault: true, faultReason: "formula error: \(error.localizedDescription)")
                 }
             } else {
-                reading = PIDReading(name: def.name, shortCode: shortCode, value: "—", unit: "", icon: Self.icon(for: def), isFault: true, faultReason: "invalid formula")
+                reading = PIDReading(name: def.name, shortCode: shortCode, value: "—", unit: "", icon: def.icon, isFault: true, faultReason: "invalid formula")
             }
         } else {
-            reading = PIDReading(name: def.name, shortCode: shortCode, value: "—", unit: "", icon: Self.icon(for: def), isFault: true, faultReason: error ?? "No data")
+            reading = PIDReading(name: def.name, shortCode: shortCode, value: "—", unit: "", icon: def.icon, isFault: true, faultReason: error ?? "No data")
         }
 
         if let index = pidReadings.firstIndex(where: { $0.shortCode == shortCode }) {
@@ -411,16 +411,6 @@ final class OBDEngine {
         } else {
             pidReadings.append(reading)
         }
-    }
-
-    private static func icon(for def: PIDDefinition) -> String {
-        let u = def.units.lowercased()
-        if u.contains("rpm") { return "gauge.with.dots.needle.67percent" }
-        if u == "%" { return "gauge.medium" }
-        if u.contains("kpa") || u.contains("psi") { return "wind" }
-        if u.contains("°") { return "thermometer" }
-        if u == "v" { return "bolt.fill" }
-        return "waveform.path.ecg"
     }
 
     private static func formatValue(_ value: Double) -> String {
