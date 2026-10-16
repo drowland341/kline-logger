@@ -105,7 +105,7 @@ fun StatusBar(connection: ConnectionUi, scan: ScanUi, recording: RecordingUi, on
                 Text(linkLabel(connection.state).uppercase(), style = GaugeLabel, color = scheme.onSurface, maxLines = 1)
                 val detail = when (connection.state) {
                     LinkState.CONNECTED -> buildString {
-                        if (connection.demoSession) append("DEMO · ")
+                        if (connection.demoSession) append("DEMO · ") else connection.sessionKind?.let { append(it.short.uppercase() + " · ") }
                         connection.ecu?.let { append("ECU 0x%02X".format(it.address)) }
                         when (scan.mode) {
                             ScanMode.SCANNING -> append(" · SCANNING ${scan.done}/${scan.total}")
@@ -113,7 +113,7 @@ fun StatusBar(connection: ConnectionUi, scan: ScanUi, recording: RecordingUi, on
                             ScanMode.IDLE -> if (connection.updateHz > 0) append(" · %.1f Hz".format(connection.updateHz))
                         }
                     }
-                    LinkState.CONNECTING -> if (connection.demoSession) "Demo ECU" else "K-line"
+                    LinkState.CONNECTING -> if (connection.demoSession) "Demo ECU" else connection.sessionKind?.label ?: "K-line"
                     LinkState.DISCONNECTED -> if (connection.demoMode) "Demo mode on" else "No ECU"
                 }
                 Text(detail, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)

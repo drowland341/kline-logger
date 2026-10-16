@@ -22,7 +22,7 @@ class StartCommResult(val ecu: Int, val keyBytes: ByteArray, val echo: Boolean?,
 
 class SessionInfo(val start: StartCommResult, val diag: String, val baud: Int)
 
-enum class Direction { TX, RX }
+enum class Direction { TX, RX, NOTE }    // NOTE: an ELM327 AT command and its answer, not a frame
 
 /**
  * K-line transport and KWP2000 request/response handling. Ported from kline.py's KLine class.
@@ -33,7 +33,7 @@ class KLine(
     private val port: Transport,
     private val s: KLineSettings = KLineSettings(),
     private val traffic: (Direction, ByteArray) -> Unit = { _, _ -> },
-) {
+) : EcuLink {
     private val ecuCandidates = s.ecuAddr?.let { listOf(it) } ?: ECU_AUTO_ADDRESSES
     var ecu = ecuCandidates[0]
         private set
@@ -119,7 +119,7 @@ class KLine(
         return SessionInfo(start, diag, port.baudRate)
     }
 
-    fun stop() {
+    override fun stop() {
         try {
             request(byteArrayOf(SID_STOP_COMM.toByte()), timeoutMs = 200)
         } catch (_: KLineException) {
@@ -127,7 +127,7 @@ class KLine(
     }
 
     /** Any answer (even a refusal) proves the ECU is still listening. */
-    fun alive(): Boolean = try {
+    override fun alive(): Boolean = try {
         request(keepalivePayload)
         true
     } catch (_: NegativeResponseException) {
@@ -138,12 +138,12 @@ class KLine(
 
     // --- requests ---------------------------------------------------------
 
-    fun request(payload: ByteArray, timeoutMs: Long? = null): ByteArray {
+    override fun request(payload: ByteArray, timeoutMs: Long?): ByteArray {
         val frame = buildFrame(ecu, tester, payload)
         return transact(frame, payload[0].toInt() and 0xFF, timeoutMs?.let { it * 1_000_000 })
     }
 
-    fun readLocalId(pid: Int): ByteArray {
+    override fun readLocalId(pid: Int): ByteArray {
         val resp = request(byteArrayOf(SID_READ_LOCAL_ID.toByte(), pid.toByte()))
         if (resp.size < 2 || (resp[1].toInt() and 0xFF) != pid) {
             throw KLineException("Answer was for a different PID: ${hexs(resp)}")

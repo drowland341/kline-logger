@@ -19,6 +19,7 @@ import com.rowlandrestorations.klinelogger.demo.DemoEcuTransport
 import com.rowlandrestorations.klinelogger.kline.BadChecksumException
 import com.rowlandrestorations.klinelogger.kline.Direction
 import com.rowlandrestorations.klinelogger.kline.KLine
+import com.rowlandrestorations.klinelogger.kline.EcuLink
 import com.rowlandrestorations.klinelogger.kline.KLineException
 import com.rowlandrestorations.klinelogger.kline.KLineSettings
 import com.rowlandrestorations.klinelogger.kline.NegativeResponseException
@@ -27,7 +28,23 @@ import com.rowlandrestorations.klinelogger.kline.SessionInfo
 import com.rowlandrestorations.klinelogger.kline.Transport
 import com.rowlandrestorations.klinelogger.kline.hexs
 import com.rowlandrestorations.klinelogger.kline.nrcName
+import com.rowlandrestorations.klinelogger.elm.BleLink
+import com.rowlandrestorations.klinelogger.elm.BtDevice
+import com.rowlandrestorations.klinelogger.elm.ByteLink
+import com.rowlandrestorations.klinelogger.elm.Elm327
+import com.rowlandrestorations.klinelogger.elm.ElmSession
+import com.rowlandrestorations.klinelogger.elm.looksLikeAdapter
+import com.rowlandrestorations.klinelogger.elm.openBluetoothClassic
+import com.rowlandrestorations.klinelogger.elm.openWifi
+import com.rowlandrestorations.klinelogger.elm.pairedDevices
+import com.rowlandrestorations.klinelogger.elm.scanBle
+import com.rowlandrestorations.klinelogger.location.GpsSpeed
 import com.rowlandrestorations.klinelogger.logging.CsvRecorder
+import com.rowlandrestorations.klinelogger.logging.ResearchLogger
+import com.rowlandrestorations.klinelogger.settings.AdapterKind
+import com.rowlandrestorations.klinelogger.settings.AdapterPrefs
+import com.rowlandrestorations.klinelogger.settings.AppPrefs
+import com.rowlandrestorations.klinelogger.settings.UnitPrefs
 import com.rowlandrestorations.klinelogger.usb.UsbSerialTransport
 import com.rowlandrestorations.klinelogger.usb.requestUsbPermission
 import kotlinx.coroutines.CancellationException
@@ -37,6 +54,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,6 +65,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
+import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -57,24 +76,47 @@ import java.util.concurrent.Executors
 
 enum class LinkState { DISCONNECTED, CONNECTING, CONNECTED }
 
-/** What the StartCommunication / StartDiagnosticSession handshake reported. */
+/** What the StartCommunication / StartDiagnosticSession handshake reported. Cable-only and adapter-only fields are null otherwise. */
 data class EcuInfo(
     val address: Int,
     val keyBytes: String,
-    val echo: String,
     val diag: String,
-    val baud: Int,
-    val response: String,
+    val response: String? = null,   // the raw StartCommunication frame (cable)
+    val echo: String? = null,       // cable
+    val baud: Int? = null,          // cable
+    val adapter: String? = null,    // ELM327: "ELM327 v1.5"
+    val link: String? = null,       // ELM327: "Bluetooth · OBDII"
+    val protocol: String? = null,   // ELM327: "ISO 14230-4 (KWP FAST)"
+    val voltage: String? = null,    // ELM327: supply voltage at the diagnostic plug
 )
 
 data class ConnectionUi(
     val state: LinkState = LinkState.DISCONNECTED,
-    val status: String = "Plug in the K-line cable, wake the ECU, then press Connect.",
+    val status: String = "Pick your adapter, then press Connect.",
     val ok: Boolean? = null,
     val demoMode: Boolean = false,
     val demoSession: Boolean = false,
     val ecu: EcuInfo? = null,
     val updateHz: Double = 0.0,
+    val adapter: AdapterPrefs = AdapterPrefs(),
+    val sessionKind: AdapterKind? = null,      // what the open (or opening) session uses; null for demo
+)
+
+/** Devices the Connection screen offers for the Bluetooth adapters. */
+data class DevicesUi(
+    val paired: List<BtDevice> = emptyList(),
+    val ble: List<BtDevice> = emptyList(),
+    val bleScanning: Boolean = false,
+    val message: String? = null,
+)
+
+/** The research log: every channel, GPS speed and the raw bytes of scanned PIDs, once a second. */
+data class ResearchUi(
+    val active: Boolean = false,
+    val pids: List<Int> = emptyList(),
+    val rows: Int = 0,
+    val file: File? = null,
+    val message: String? = null,
 )
 
 /** Latest decoded value of one channel, the bytes it came from, and recent history for sparklines. */
@@ -88,7 +130,9 @@ data class RecordingUi(
     val fileName: String? = null,
     val folder: String? = null,
     val savedRows: Int? = null,
-)
+) {
+    val file: File? get() = if (fileName != null && folder != null) File(folder, fileName) else null
+}
 
 enum class ScanMode { IDLE, SCANNING, WATCHING }
 
@@ -130,6 +174,7 @@ data class ScanUi(
     val rows: Map<Int, ScanRow> = emptyMap(),
     val watching: List<Int> = emptyList(),
     val sampleHz: Double = 0.0,
+    val exported: File? = null,
     val message: String = "Scan a range of PIDs to see everything this ECU answers. Live data pauses while the scanner runs.",
 ) {
     val answering: List<ScanRow> get() = rows.values.filter { it.result == ScanResult.ANSWERS }.sortedBy { it.pid }
@@ -171,8 +216,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The channel list (pids.json). Edited from Live Data and the scanner; saved on every change. */
     val channels: StateFlow<List<PidDef>> = _channels.asStateFlow()
 
-    private val _connection = MutableStateFlow(ConnectionUi(status = channelError ?: ConnectionUi().status, ok = channelError?.let { false }))
+    private val prefs = AppPrefs(app)
+
+    private val _connection = MutableStateFlow(
+        ConnectionUi(status = channelError ?: ConnectionUi().status, ok = channelError?.let { false }, adapter = prefs.adapter()),
+    )
     val connection: StateFlow<ConnectionUi> = _connection.asStateFlow()
+
+    private val _devices = MutableStateFlow(DevicesUi())
+    val devices: StateFlow<DevicesUi> = _devices.asStateFlow()
+    private var stopBleScan: (() -> Unit)? = null
+
+    private val _units = MutableStateFlow(prefs.units())
+    val units: StateFlow<UnitPrefs> = _units.asStateFlow()
+
+    /** Phone GPS speed, for Live Data and the research log (the ECU has no working speed channel). */
+    val gps = GpsSpeed(app)
+
+    private val _research = MutableStateFlow(ResearchUi())
+    val research: StateFlow<ResearchUi> = _research.asStateFlow()
+
+    /** True when the saved channel list predates the bundled defaults: offer the new ones once. */
+    private val _defaultsOffer = MutableStateFlow(channelError == null && store.savedRevision() < ChannelStore.DEFAULTS_REVISION)
+    val defaultsOffer: StateFlow<Boolean> = _defaultsOffer.asStateFlow()
 
     private val _readings = MutableStateFlow<Map<Int, Reading>>(emptyMap())
     val readings: StateFlow<Map<Int, Reading>> = _readings.asStateFlow()
@@ -213,7 +279,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var logStart = System.nanoTime()
 
     // The open session's link, for one-off requests (fault codes) slotted in between bus steps.
-    @Volatile private var activeLink: KLine? = null
+    @Volatile private var activeLink: EcuLink? = null
 
     // Frames of the fault-code request in progress. Touched only on the serial thread.
     private var capture: MutableList<RawLine>? = null
@@ -238,26 +304,72 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Touched only on the serial thread.
     private var recorder: CsvRecorder? = null
+    private var researchLog: ResearchLogger? = null
     private var sessionStart = 0L
     private var misses = 0
+
+    // Research log PIDs to read alongside the channels. Set from the main thread, read on the serial thread.
+    @Volatile private var researchPids: List<Int> = emptyList()
 
     // --- connection ---------------------------------------------------------
 
     fun setDemoMode(on: Boolean) {
         if (_connection.value.state != LinkState.DISCONNECTED) return
-        _connection.update {
-            it.copy(
-                demoMode = on,
-                ok = null,
-                status = if (on) "Demo mode: press Connect to start the simulated ECU."
-                else "Plug in the K-line cable, wake the ECU, then press Connect.",
-            )
+        _connection.update { it.copy(demoMode = on, ok = null, status = idleStatus(on, it.adapter.kind)) }
+    }
+
+    private fun idleStatus(demo: Boolean, kind: AdapterKind): String = when {
+        demo -> "Demo mode: press Connect to start the simulated ECU."
+        kind == AdapterKind.USB_CABLE -> "Plug in the K-line cable, wake the ECU, then press Connect."
+        kind == AdapterKind.WIFI -> "Join the adapter's Wi-Fi network, turn the key on, then press Connect."
+        else -> "Plug the adapter into the ski's diagnostic plug, turn the key on, then press Connect."
+    }
+
+    /** Remembers which adapter to use (and which device or address). Only while disconnected. */
+    fun setAdapter(a: AdapterPrefs) {
+        if (_connection.value.state != LinkState.DISCONNECTED) return
+        prefs.saveAdapter(a)
+        _connection.update { it.copy(adapter = a, ok = null, status = idleStatus(it.demoMode, a.kind)) }
+    }
+
+    fun refreshPairedDevices() {
+        _devices.update { it.copy(paired = pairedDevices(getApplication()), message = null) }
+    }
+
+    /** Looks for Bluetooth LE adapters for ten seconds. */
+    fun startBleScan() {
+        stopBleScan?.invoke()
+        _devices.update { it.copy(ble = emptyList(), bleScanning = true, message = null) }
+        var stop: (() -> Unit)? = null
+        stop = scanBle(
+            getApplication(),
+            onFound = { d -> _devices.update { s -> s.copy(ble = (s.ble + d).sortedByDescending { looksLikeAdapter(it.name) }) } },
+            onError = { msg -> _devices.update { it.copy(bleScanning = false, message = msg) } },
+        )
+        stopBleScan = stop
+        viewModelScope.launch {
+            delay(10_000)
+            if (stopBleScan === stop) stopBleScanNow()
         }
     }
 
+    fun stopBleScanNow() {
+        stopBleScan?.invoke()
+        stopBleScan = null
+        _devices.update { it.copy(bleScanning = false) }
+    }
+
     fun connect() {
-        if (_connection.value.state != LinkState.DISCONNECTED) return
-        val demo = _connection.value.demoMode
+        val c = _connection.value
+        if (c.state != LinkState.DISCONNECTED) return
+        val demo = c.demoMode
+        val adapter = c.adapter
+        val kind = adapter.kind
+        if (!demo && kind == AdapterKind.BLUETOOTH && adapter.bluetooth == null) {
+            return fail("Pick your adapter from the paired devices first. Pair it in Android's Bluetooth settings if it isn't listed (PIN is usually 1234 or 0000).")
+        }
+        if (!demo && kind == AdapterKind.BLE && adapter.ble == null) return fail("Press Scan, then pick your adapter first.")
+        stopBleScanNow()
         userStopped = false
         logStart = System.nanoTime()
         busMode = BusMode.Poll
@@ -267,32 +379,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _connection.update {
             it.copy(
                 state = LinkState.CONNECTING, ok = null, ecu = null, updateHz = 0.0, demoSession = demo,
-                status = if (demo) "Starting the simulated ECU…" else "Looking for the cable…",
+                sessionKind = if (demo) null else kind,
+                status = when {
+                    demo -> "Starting the simulated ECU…"
+                    kind == AdapterKind.USB_CABLE -> "Looking for the cable…"
+                    kind == AdapterKind.BLUETOOTH -> "Connecting to ${adapter.bluetooth?.name}…"
+                    kind == AdapterKind.BLE -> "Connecting to ${adapter.ble?.name}…"
+                    else -> "Connecting to ${adapter.wifiHost}:${adapter.wifiPort}…"
+                },
             )
         }
+        val wired = demo || kind == AdapterKind.USB_CABLE
         session = viewModelScope.launch {
-            var port: Transport? = null
-            var link: KLine? = null
+            var closeable: Closeable? = null
+            var link: EcuLink? = null
             try {
-                port = if (demo) DemoEcuTransport() else openUsbCable() ?: return@launch
-                _connection.update { it.copy(status = "Waking the ECU…") }
-                val kline = KLine(port, settings, ::logTraffic)
-                val info = withContext(serial) { kline.startSession() }
-                link = kline
-                activeLink = kline
+                val (ecuLink, info) = if (wired) {
+                    val port: Transport = if (demo) DemoEcuTransport() else openUsbCable() ?: return@launch
+                    closeable = port
+                    _connection.update { it.copy(status = "Waking the ECU…") }
+                    val kline = KLine(port, settings, ::logTraffic)
+                    val s = withContext(serial) { kline.startSession() }
+                    kline to s.toEcuInfo()
+                } else {
+                    val io = withContext(serial) { openAdapter(adapter) }
+                    closeable = io
+                    _connection.update { it.copy(status = "Adapter connected. Waking the ECU…") }
+                    val elm = Elm327(io, ::logTraffic, ::logNote)
+                    val s = withContext(serial) { elm.startSession() }
+                    elm to s.toEcuInfo(io.description)
+                }
+                link = ecuLink
+                activeLink = ecuLink
                 _connection.update {
                     it.copy(
-                        state = LinkState.CONNECTED, ok = true, ecu = info.toEcuInfo(),
-                        status = "ECU 0x%02X answered. Diagnostic session %s.".format(info.start.ecu, info.diag),
+                        state = LinkState.CONNECTED, ok = true, ecu = info,
+                        status = "ECU 0x%02X answered. Diagnostic session %s.".format(info.address, info.diag),
                     )
                 }
-                withContext(serial) { runBus(kline) }
+                withContext(serial) { runBus(ecuLink) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: KLineException) {
                 fail(e.message ?: "No answer from the ECU.")
             } catch (e: IOException) {
-                fail("Cable problem: ${e.message}")
+                fail(if (wired) "Cable problem: ${e.message}" else e.message ?: "Lost the adapter.")
+            } catch (e: SecurityException) {
+                fail("Bluetooth permission was denied. Allow Nearby devices for this app in Android settings.")
             } finally {
                 busMode = BusMode.Poll
                 activeLink = null
@@ -301,8 +434,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(NonCancellable) {
                     withContext(serial) {
                         stopRecorder()
-                        if (userStopped) link?.stop()
-                        port?.close()
+                        stopResearchLog("Stopped: the ECU link closed.")
+                        try {
+                            if (userStopped) link?.stop()
+                        } catch (_: IOException) {
+                        }
+                        try {
+                            closeable?.close()
+                        } catch (_: IOException) {
+                        }
                     }
                     _scan.update {
                         if (it.mode == ScanMode.IDLE) it
@@ -349,6 +489,64 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _rawLog.value = emptyList()
     }
 
+    fun setUnits(u: UnitPrefs) {
+        prefs.saveUnits(u)
+        _units.value = u
+    }
+
+    // --- research log -----------------------------------------------------------
+
+    /**
+     * Logs every channel, GPS speed and the raw bytes of [pids] (PIDs the scanner found) once a second
+     * until stopped. Like the iOS app's Research Mode: move, rev or switch things while it runs, then look
+     * for the PID that tracks what you did. Streams to disk, so a crash on the water doesn't lose the run.
+     */
+    fun startResearchLog(pids: List<Int>) {
+        if (_connection.value.state != LinkState.CONNECTED || _research.value.active) return
+        if (_scan.value.mode != ScanMode.IDLE) {
+            _research.update { it.copy(message = "Stop the scan or watch first: the research log reads alongside live data.") }
+            return
+        }
+        val extras = pids.sorted()
+        viewModelScope.launch(serial) {
+            try {
+                val tag = if (_connection.value.demoSession) "demo" else "ski"
+                researchLog = ResearchLogger.start(logDir, _channels.value, extras, tag)
+                researchPids = extras
+                _research.value = ResearchUi(
+                    active = true, pids = extras, file = researchLog?.file,
+                    message = "Logging ${_channels.value.size} channels, GPS speed and ${extras.size} scanned PIDs once a second.",
+                )
+            } catch (e: IOException) {
+                _research.update { it.copy(message = "Couldn't start the research log: ${e.message}") }
+            }
+        }
+    }
+
+    fun stopResearchLog() {
+        viewModelScope.launch(serial) { stopResearchLog(null) }
+    }
+
+    /** Serial thread only. */
+    private fun stopResearchLog(reason: String?) {
+        val r = researchLog ?: return
+        researchLog = null
+        researchPids = emptyList()
+        try {
+            r.close()
+        } catch (_: IOException) {
+        }
+        _research.value = ResearchUi(
+            rows = r.rows, file = r.file,
+            message = (reason?.let { "$it " } ?: "") + "Saved ${r.rows} rows to ${r.file.name}.",
+        )
+    }
+
+    // --- GPS ----------------------------------------------------------------------
+
+    /** Call once location permission is granted. */
+    fun startGps() = gps.start()
+
     // --- channels -----------------------------------------------------------
 
     /** Adds [ch] (when [originalPid] is null) or replaces the channel that had [originalPid]. Returns an error, or null. */
@@ -377,6 +575,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val channelFile: String get() = store.file.path
 
+    /** Answer to the new-defaults offer: take the bundled channels, or keep the user's (and stop asking). */
+    fun answerDefaultsOffer(useNew: Boolean) {
+        _defaultsOffer.value = false
+        if (useNew) resetChannels() else commitChannels(_channels.value, emptySet())   // re-saving stamps the current revision
+    }
+
     private fun commitChannels(list: List<PidDef>, changed: Set<Int>) {
         _channels.value = list
         resetPids.addAll(changed)
@@ -394,8 +598,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- scanner ------------------------------------------------------------
 
+    /** The scanner takes over the bus, which would leave gaps in a research log. */
+    private fun researchBlocksScanner(): Boolean {
+        if (!_research.value.active) return false
+        _scan.update { it.copy(message = "Stop the research log first: scanning or watching would leave gaps in it.") }
+        return true
+    }
+
     fun startScan(from: Int, to: Int) {
-        if (_connection.value.state != LinkState.CONNECTED) return
+        if (_connection.value.state != LinkState.CONNECTED || researchBlocksScanner()) return
         val lo = minOf(from, to)
         val hi = maxOf(from, to)
         _scan.value = ScanUi(
@@ -407,7 +618,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Re-reads the answering PIDs in [selected] (all of them if none are selected) as fast as the bus allows. */
     fun watch(selected: Set<Int>) {
-        if (_connection.value.state != LinkState.CONNECTED) return
+        if (_connection.value.state != LinkState.CONNECTED || researchBlocksScanner()) return
         val answering = _scan.value.answering.map { it.pid }
         if (answering.isEmpty()) {
             _scan.update { it.copy(message = "Run a scan first. Watch re-reads the PIDs that answered.") }
@@ -436,6 +647,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val s = _scan.value
         if (s.rows.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
+            var exported: File? = null
             val msg = try {
                 logDir.mkdirs()
                 val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
@@ -455,11 +667,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                 }
-                "Saved the scan to ${file.path}"
+                exported = file
+                "Saved the scan to ${file.name}."
             } catch (e: IOException) {
                 "Couldn't save the scan: ${e.message}"
             }
-            _scan.update { it.copy(message = msg) }
+            _scan.update { it.copy(message = msg, exported = exported) }
         }
     }
 
@@ -557,13 +770,48 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val history = HashMap<Int, ArrayDeque<Float>>()
         val latest = HashMap<Int, Double?>()
         val unsupported = HashSet<Int>()
+        val raw = HashMap<Int, ByteArray>()     // latest bytes of every PID read, for the research log
         var cycle = 0L
+        var priorityPos = 0
+        var extraPos = 0
         var rateStart = System.nanoTime()
         var rateCycles = 0
     }
 
+    /** Reads one channel and publishes the result. */
+    private fun readChannel(link: EcuLink, ch: PidDef, st: PollState) {
+        val history = st.history.getOrPut(ch.pid) { ArrayDeque(HISTORY + 1) }
+        val reading: Reading = try {
+            val data = link.readLocalId(ch.pid)
+            misses = 0
+            st.raw[ch.pid] = data
+            val v = try {
+                ch.decode(data)
+            } catch (e: RuntimeException) {
+                null
+            }
+            if (v == null || v.isNaN() || v.isInfinite()) {
+                Reading(null, history.toList(), "Formula error", data)
+            } else {
+                st.latest[ch.pid] = v
+                history.addLast(v.toFloat())
+                if (history.size > HISTORY) history.removeFirst()
+                Reading(v, history.toList(), raw = data)
+            }
+        } catch (e: NegativeResponseException) {
+            if (e.code in PERMANENT_NRCS) st.unsupported += ch.pid
+            st.latest[ch.pid] = null
+            st.raw.remove(ch.pid)
+            Reading(null, history.toList(), "ECU refused: ${nrcName(e.code)}")
+        } catch (e: KLineException) {
+            missed(link)
+            return
+        }
+        _readings.update { it + (ch.pid to reading) }
+    }
+
     /** Runs the bus until cancelled or the ECU stops answering: polling channels, or scanning/watching. */
-    private suspend fun runBus(link: KLine) {
+    private suspend fun runBus(link: EcuLink) {
         val poll = PollState()
         sessionStart = System.nanoTime()
         misses = 0
@@ -579,7 +827,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Silence once is noise; three in a row means asking the ECU whether it's still there. */
-    private fun missed(link: KLine) {
+    private fun missed(link: EcuLink) {
         misses++
         if (misses >= 3) {
             if (!link.alive()) throw NoResponseException("The ECU stopped answering. Check the key and the cable.")
@@ -588,7 +836,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Reads every channel due this cycle (each at its own `every` rate). */
-    private suspend fun pollCycle(link: KLine, st: PollState) {
+    private suspend fun pollCycle(link: EcuLink, st: PollState) {
         while (true) {
             val pid = resetPids.poll() ?: break
             st.history.remove(pid)
@@ -601,40 +849,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (!link.alive()) throw NoResponseException("The ECU stopped answering. Check the key and the cable.")
             return
         }
-        for (ch in channels) {
+        // Priority channels (RPM) are re-read between every other read, so the tach tracks about twice as fast
+        // instead of waiting for the whole sweep. Same idea as the iOS app's pollStep.
+        val priority = channels.filter { it.priority && it.pid !in st.unsupported }
+        val due = channels.filter { !it.priority && it.pid !in st.unsupported && st.cycle % it.every == 0L }
+        val plan = ArrayList<PidDef>(due.size * 2 + priority.size)
+        if (priority.isEmpty()) {
+            plan += due
+        } else {
+            for (ch in due) {
+                plan += priority[st.priorityPos++ % priority.size]
+                plan += ch
+            }
+            if (due.isEmpty()) plan += priority
+        }
+        for (ch in plan) {
             if (busMode != BusMode.Poll) return          // the scanner took over mid-cycle
-            if (ch.pid in st.unsupported || st.cycle % ch.every != 0L) continue
-            val history = st.history.getOrPut(ch.pid) { ArrayDeque(HISTORY + 1) }
-            val reading: Reading = try {
-                val data = link.readLocalId(ch.pid)
+            if (ch.pid in st.unsupported) continue
+            readChannel(link, ch, st)
+            yield()
+        }
+        // Research log: a few of the scanned PIDs per cycle, round-robin, so the gauges keep their pace.
+        val extras = researchPids.filter { pid -> channels.none { it.pid == pid } }
+        repeat(minOf(EXTRAS_PER_CYCLE, extras.size)) {
+            if (busMode != BusMode.Poll) return
+            val pid = extras[st.extraPos++ % extras.size]
+            try {
+                st.raw[pid] = link.readLocalId(pid)
                 misses = 0
-                val v = try {
-                    ch.decode(data)
-                } catch (e: RuntimeException) {
-                    null
-                }
-                if (v == null || v.isNaN() || v.isInfinite()) {
-                    Reading(null, history.toList(), "Formula error", data)
-                } else {
-                    st.latest[ch.pid] = v
-                    history.addLast(v.toFloat())
-                    if (history.size > HISTORY) history.removeFirst()
-                    Reading(v, history.toList(), raw = data)
-                }
             } catch (e: NegativeResponseException) {
-                if (e.code in PERMANENT_NRCS) st.unsupported += ch.pid
-                st.latest[ch.pid] = null
-                Reading(null, history.toList(), "ECU refused: ${nrcName(e.code)}")
+                st.raw.remove(pid)
             } catch (e: KLineException) {
                 missed(link)
-                continue
             }
-            _readings.update { it + (ch.pid to reading) }
             yield()
         }
         st.cycle++
+        val elapsed = (System.nanoTime() - sessionStart) / 1e9
         recorder?.let { r ->
-            r.write((System.nanoTime() - sessionStart) / 1e9, r.channels.map { st.latest[it.pid] })
+            r.write(elapsed, r.channels.map { st.latest[it.pid] })
+        }
+        researchLog?.let { r ->
+            if (elapsed - r.lastRowSeconds >= RESEARCH_INTERVAL_S) {
+                try {
+                    gps.expireStale()
+                    r.write(elapsed, st.latest, gps.mph.value, st.raw)
+                    _research.update { it.copy(rows = r.rows) }
+                } catch (e: IOException) {
+                    stopResearchLog("Stopped: couldn't write the file (${e.message}).")
+                }
+            }
         }
         st.rateCycles++
         val now = System.nanoTime()
@@ -647,7 +911,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Asks the ECU for the next PID in the scan range. Ported from kline.py's _scan_step. */
-    private fun scanStep(link: KLine, m: BusMode.Scan) {
+    private fun scanStep(link: EcuLink, m: BusMode.Scan) {
         val pid = m.queue.firstOrNull()
         if (pid == null) {
             if (busMode === m) {
@@ -679,7 +943,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Re-reads the watched PIDs in turn, tracking low/high/changes. Ported from kline.py's _watch_step. */
-    private fun watchStep(link: KLine, m: BusMode.Watch) {
+    private fun watchStep(link: EcuLink, m: BusMode.Watch) {
         if (m.pids.isEmpty()) {
             busMode = BusMode.Poll
             return
@@ -734,11 +998,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun logTraffic(dir: Direction, data: ByteArray) {
         val line = RawLine((System.nanoTime() - logStart) / 1e9, dir, hexs(data))
         capture?.add(line)
+        appendRawLine(line)
+    }
+
+    /** An ELM327 AT command and its answer, shown in the raw log between the frames. */
+    private fun logNote(text: String) {
+        appendRawLine(RawLine((System.nanoTime() - logStart) / 1e9, Direction.NOTE, text))
+    }
+
+    private fun appendRawLine(line: RawLine) {
         _rawLog.update { if (it.size >= MAX_RAW_LINES) it.drop(it.size - MAX_RAW_LINES + 1) + line else it + line }
     }
 
     private fun fail(status: String) {
         _connection.update { it.copy(status = status, ok = false) }
+    }
+
+    @Throws(IOException::class)
+    private fun openAdapter(a: AdapterPrefs): ByteLink = when (a.kind) {
+        AdapterKind.BLUETOOTH -> openBluetoothClassic(getApplication(), a.bluetooth ?: throw IOException("No adapter picked."))
+        AdapterKind.BLE -> BleLink.open(getApplication(), a.ble ?: throw IOException("No adapter picked."))
+        AdapterKind.WIFI -> openWifi(getApplication(), a.wifiHost, a.wifiPort)
+        AdapterKind.USB_CABLE -> throw IOException("The USB cable doesn't use an ELM327.")
     }
 
     private fun SessionInfo.toEcuInfo() = EcuInfo(
@@ -754,7 +1035,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         response = hexs(start.response),
     )
 
+    private fun ElmSession.toEcuInfo(link: String) = EcuInfo(
+        address = ecu,
+        keyBytes = keyBytes.ifEmpty { "—" },
+        diag = diag,
+        adapter = version,
+        link = link,
+        protocol = protocol,
+        voltage = voltage,
+    )
+
     override fun onCleared() {
+        stopBleScanNow()
+        gps.stop()
         serial.close()
     }
 
@@ -763,6 +1056,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val WATCH_HISTORY = 200
         private const val MAX_RAW_LINES = 400
         private const val MAX_CODE_EXCHANGES = 6
+        private const val EXTRAS_PER_CYCLE = 4
+        private const val RESEARCH_INTERVAL_S = 1.0
         private val PERMANENT_NRCS = setOf(0x11, 0x12, 0x31)
     }
 }

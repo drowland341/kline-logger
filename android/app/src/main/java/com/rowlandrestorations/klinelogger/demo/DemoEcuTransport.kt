@@ -190,15 +190,16 @@ private class EngineSim {
         lastT = el
         coolantC += (target - coolantC) * (1 - exp(-dt / 25)) * (if (coolantC < 70) 0.6 else 1.0)
         return when (pid) {
-            0x09 -> u16(s.rpm + noise(8.0))
+            0x09 -> u16((s.rpm + noise(8.0)) / 4)                                  // 4 rpm per count, like the real ECU
             0x04 -> u16(246 + (s.tps + noise(0.3)).coerceIn(0.0, 100.0) / 100 * 666)
-            0x08 -> u16((40 + 57 * s.tps / 100 + noise(0.4)) / 0.124)            // ~40 kPa idle, ~97 kPa WOT
+            0x05 -> u16((40 + 57 * s.tps / 100 + noise(0.4)) / 0.124)            // ~40 kPa idle, ~97 kPa WOT
+            0x08 -> u16(101.3 / 0.124)                                            // frozen duplicate, like the real ECU
             0x06 -> u16(coolantC + 40)
             0x07 -> u16(31 + 2 * sin(el / 20) + noise(0.3) + 40)
-            0x05 -> u16(101.3 / 0.124)
+            0x98 -> u16(coolantC * 1.5 + noise(0.3) + 40)                          // oil runs hotter than the coolant
             0x0A -> {
                 val volts = (if (s.rpm > 2000) 14.2 else 12.9) + noise(0.05)       // charging above idle
-                listOf((volts * 12.75).roundToInt().coerceIn(0, 255))
+                u16(volts * 51)
             }
             0x1F -> {
                 counter = (counter + 1) and 0xFF

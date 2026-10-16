@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +40,13 @@ import com.rowlandrestorations.klinelogger.MainViewModel
 import com.rowlandrestorations.klinelogger.Reading
 import com.rowlandrestorations.klinelogger.channels.PidDef
 import com.rowlandrestorations.klinelogger.kline.hexs
+import com.rowlandrestorations.klinelogger.location.GpsSpeed
+import com.rowlandrestorations.klinelogger.settings.LocalUnits
+import com.rowlandrestorations.klinelogger.settings.convert
+import com.rowlandrestorations.klinelogger.settings.label
+import com.rowlandrestorations.klinelogger.settings.speedFromMph
+import com.rowlandrestorations.klinelogger.ui.LOCATION_PERMISSIONS
+import com.rowlandrestorations.klinelogger.ui.rememberPermissionRequest
 import com.rowlandrestorations.klinelogger.ui.components.Sparkline
 import com.rowlandrestorations.klinelogger.ui.components.autoDecimals
 import com.rowlandrestorations.klinelogger.ui.components.formatValue
@@ -52,6 +60,9 @@ fun LiveDataScreen(
     readings: Map<Int, Reading>,
     connection: ConnectionUi,
     banner: @Composable () -> Unit,
+    gpsMph: Double?,
+    gpsStatus: GpsSpeed.Status,
+    onEnableGps: () -> Unit,
     onEdit: (PidDef) -> Unit,
     onAdd: () -> Unit,
     onReset: () -> Unit,
@@ -76,6 +87,7 @@ fun LiveDataScreen(
                 TextButton(onClick = onAdd) { Text("+ ADD") }
             }
         }
+        item { GpsCard(gpsMph, gpsStatus, onEnableGps) }
         items(channels, key = { it.pid }) { ch -> ChannelRow(ch, readings[ch.pid], onClick = { onEdit(ch) }) }
         item {
             Text(
@@ -107,8 +119,10 @@ fun LiveDataScreen(
 private fun ChannelRow(ch: PidDef, reading: Reading?, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val status = GaugeTheme.status
-    val value = reading?.value
-    val history = reading?.history.orEmpty()
+    val units = LocalUnits.current
+    val value = reading?.value?.let { units.convert(it, ch.units) }
+    val history = reading?.history.orEmpty().map { units.convert(it.toDouble(), ch.units).toFloat() }
+    val shownUnits = units.label(ch.displayUnits)
     Surface(shape = RoundedCornerShape(16.dp), color = scheme.surfaceContainerHigh) {
         Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -140,9 +154,9 @@ private fun ChannelRow(ch: PidDef, reading: Reading?, onClick: () -> Unit) {
                         textAlign = TextAlign.End,
                         modifier = Modifier.alignByBaseline(),
                     )
-                    if (ch.displayUnits.isNotEmpty()) {
+                    if (shownUnits.isNotEmpty()) {
                         Spacer(Modifier.width(4.dp))
-                        Text(ch.displayUnits, style = MaterialTheme.typography.titleSmall, color = scheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())
+                        Text(shownUnits, style = MaterialTheme.typography.titleSmall, color = scheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())
                     }
                 }
             }
@@ -187,4 +201,43 @@ private fun Tag(text: String) {
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
             .padding(horizontal = 5.dp, vertical = 1.dp),
     )
+}
+
+/** Phone GPS speed: the reference for spotting a speed PID, since the ECU's candidates stay flat. */
+@Composable
+private fun GpsCard(mph: Double?, status: GpsSpeed.Status, onEnable: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val units = LocalUnits.current
+    val request = rememberPermissionRequest { granted -> if (granted) onEnable() }
+    Surface(shape = RoundedCornerShape(16.dp), color = scheme.surfaceContainerHigh) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("GPS Speed", style = MaterialTheme.typography.titleMedium, color = scheme.onSurface)
+                Text(
+                    when (status) {
+                        GpsSpeed.Status.FIX -> "phone GPS · logged in research logs"
+                        GpsSpeed.Status.WAITING -> "waiting for a GPS fix…"
+                        GpsSpeed.Status.GPS_OFF -> "turn on Location in Android settings"
+                        GpsSpeed.Status.NO_PERMISSION, GpsSpeed.Status.OFF -> "needs location permission"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = GaugeTheme.status.faint,
+                )
+            }
+            if (status == GpsSpeed.Status.NO_PERMISSION || status == GpsSpeed.Status.OFF) {
+                OutlinedButton(onClick = { request(LOCATION_PERMISSIONS) }) { Text("ENABLE") }
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        mph?.let { formatValue(units.speedFromMph(it), 1) } ?: "—",
+                        style = GaugeNumerals.copy(fontSize = 32.sp, lineHeight = 34.sp),
+                        color = scheme.onSurface,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(units.speed.symbol, style = MaterialTheme.typography.titleSmall, color = scheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())
+                }
+            }
+        }
+    }
 }

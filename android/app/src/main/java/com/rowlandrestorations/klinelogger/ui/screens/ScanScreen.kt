@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rowlandrestorations.klinelogger.ConnectionUi
+import com.rowlandrestorations.klinelogger.ResearchUi
 import com.rowlandrestorations.klinelogger.LinkState
 import com.rowlandrestorations.klinelogger.ScanMode
 import com.rowlandrestorations.klinelogger.ScanResult
@@ -55,6 +57,8 @@ import com.rowlandrestorations.klinelogger.ScanUi
 import com.rowlandrestorations.klinelogger.channels.PidDef
 import com.rowlandrestorations.klinelogger.channels.parsePid
 import com.rowlandrestorations.klinelogger.ui.components.Sparkline
+import com.rowlandrestorations.klinelogger.ui.shareFile
+import java.io.File
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeLabel
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeNumerals
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeTheme
@@ -69,6 +73,9 @@ fun ScanScreen(
     scan: ScanUi,
     connection: ConnectionUi,
     channels: List<PidDef>,
+    research: ResearchUi,
+    onResearchStart: (List<Int>) -> Unit,
+    onResearchStop: () -> Unit,
     onScan: (Int, Int) -> Unit,
     onWatch: (Set<Int>) -> Unit,
     onStop: () -> Unit,
@@ -96,12 +103,15 @@ fun ScanScreen(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { Controls(scan, connection, selected, onScan, onWatch, onStop) }
+        item { Controls(scan, connection, selected, onScan, onWatch, onStop, locked = research.active) }
+        if (scan.answering.isNotEmpty() || research.active || research.file != null) {
+            item { ResearchCard(scan, connection, research, selected, onResearchStart, onResearchStop) }
+        }
         if (scan.rows.isNotEmpty()) {
             item {
                 Toolbar(
                     showAll, { showAll = it }, sort, { sort = it },
-                    selectedCount = selected.size, onClearSelection = { selected = emptySet() }, onExport = onExport,
+                    selectedCount = selected.size, onClearSelection = { selected = emptySet() }, onExport = onExport, exported = scan.exported,
                 )
             }
         }
@@ -126,6 +136,7 @@ private fun Controls(
     onScan: (Int, Int) -> Unit,
     onWatch: (Set<Int>) -> Unit,
     onStop: () -> Unit,
+    locked: Boolean,          // a research log is running: scanning would leave gaps in it
 ) {
     val scheme = MaterialTheme.colorScheme
     var fromText by rememberSaveable { mutableStateOf("%02X".format(scan.from)) }
@@ -162,11 +173,11 @@ private fun Controls(
                 } else {
                     Button(
                         onClick = { if (from != null && to != null) onScan(from, to) },
-                        enabled = connected && from != null && to != null, modifier = big,
+                        enabled = connected && !locked && from != null && to != null, modifier = big,
                     ) { Text("SCAN") }
                     OutlinedButton(
                         onClick = { onWatch(selected) },
-                        enabled = connected && scan.answering.isNotEmpty(), modifier = big,
+                        enabled = connected && !locked && scan.answering.isNotEmpty(), modifier = big,
                     ) { Text(if (selected.isEmpty()) "WATCH ALL" else "WATCH ${selected.size}") }
                 }
             }
@@ -201,7 +212,9 @@ private fun Toolbar(
     selectedCount: Int,
     onClearSelection: () -> Unit,
     onExport: () -> Unit,
+    exported: File?,
 ) {
+    val context = LocalContext.current
     val chipColors = FilterChipDefaults.filterChipColors(
         selectedContainerColor = MaterialTheme.colorScheme.primary,
         selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
@@ -228,6 +241,7 @@ private fun Toolbar(
             )
             if (selectedCount > 0) TextButton(onClick = onClearSelection) { Text("CLEAR") }
             TextButton(onClick = onExport) { Text("EXPORT CSV") }
+            if (exported != null) TextButton(onClick = { shareFile(context, exported) }) { Text("SHARE") }
         }
     }
 }
@@ -319,3 +333,62 @@ private fun ScanRowCard(
     }
 }
 
+
+/**
+ * Research log: every channel, GPS speed and the raw bytes of the PIDs the scan found, once a second, all
+ * timestamped together (the iOS app's Research Mode). Ride, rev or flip switches while it runs, then look
+ * through the CSV for the PID that tracks what you did. That's how Oil Temp (0x98) was found.
+ */
+@Composable
+private fun ResearchCard(
+    scan: ScanUi,
+    connection: ConnectionUi,
+    research: ResearchUi,
+    selected: Set<Int>,
+    onStart: (List<Int>) -> Unit,
+    onStop: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val connected = connection.state == LinkState.CONNECTED
+    val answering = scan.answering.map { it.pid }
+    val picked = answering.filter { it in selected }
+    Surface(shape = RoundedCornerShape(20.dp), color = scheme.surfaceContainerHigh) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("RESEARCH LOG", style = GaugeLabel, color = scheme.onSurfaceVariant)
+            if (research.active) {
+                Text(
+                    "${research.rows} rows · ${research.pids.size} scanned PIDs · ${research.file?.name.orEmpty()}",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                    color = GaugeTheme.status.critical,
+                )
+                Button(
+                    onClick = onStop, modifier = Modifier.fillMaxWidth().height(52.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = GaugeTheme.status.critical, contentColor = GaugeTheme.status.onStatus),
+                ) { Text("STOP LOGGING") }
+            } else {
+                Text(
+                    "Logs every channel, GPS speed and the raw bytes of the scanned PIDs once a second until you stop it. " +
+                        "Ride, rev or flip switches while it runs, then share the CSV and look for the PID that moved.",
+                    style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                )
+                val idle = connected && scan.mode == ScanMode.IDLE && answering.isNotEmpty()
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { onStart(answering) }, enabled = idle, modifier = Modifier.weight(1f).height(52.dp)) {
+                        Text("LOG ALL ${answering.size}")
+                    }
+                    if (picked.isNotEmpty()) {
+                        OutlinedButton(onClick = { onStart(picked) }, enabled = idle, modifier = Modifier.weight(1f).height(52.dp)) {
+                            Text("LOG ${picked.size} TICKED")
+                        }
+                    }
+                }
+                val file = research.file
+                if (file != null) {
+                    OutlinedButton(onClick = { shareFile(context, file) }) { Text("SHARE ${file.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
+            }
+            research.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant) }
+        }
+    }
+}
