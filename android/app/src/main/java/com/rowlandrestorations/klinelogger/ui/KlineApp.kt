@@ -45,7 +45,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rowlandrestorations.klinelogger.LinkState
 import com.rowlandrestorations.klinelogger.MainViewModel
 import com.rowlandrestorations.klinelogger.R
-import com.rowlandrestorations.klinelogger.channels.ChannelStore
 import com.rowlandrestorations.klinelogger.settings.LocalUnits
 import com.rowlandrestorations.klinelogger.ui.components.LiveDataBanner
 import com.rowlandrestorations.klinelogger.ui.components.StatusBar
@@ -165,7 +164,7 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                 onDismiss = { editor = null },
             )
         }
-        if (defaultsOffer) DefaultsOfferDialog(onAnswer = vm::answerDefaultsOffer)
+        defaultsOffer?.let { DefaultsOfferDialog(note = it, onAnswer = vm::answerDefaultsOffer) }
         BrandIntro()
     }
     }
@@ -205,13 +204,13 @@ private fun BrandIntro() {
 
 /** After an update with new default channels, asks once whether to take them (like the desktop app). */
 @Composable
-private fun DefaultsOfferDialog(onAnswer: (Boolean) -> Unit) {
+private fun DefaultsOfferDialog(note: String, onAnswer: (Boolean) -> Unit) {
     AlertDialog(
         onDismissRequest = {},
         title = { Text("New default channels") },
         text = {
             Text(
-                "This version has updated default channels: ${ChannelStore.DEFAULTS_NOTE}.\n\n" +
+                "This version has updated default channels: $note.\n\n" +
                     "Replace your channel list with the new defaults? Choose Keep Mine if you added channels or " +
                     "calibrated the throttle yourself. You can still restore the defaults any time from Live Data.",
             )

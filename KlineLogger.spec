@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 datas = collect_data_files("customtkinter")      # CustomTkinter's themes and fonts
 datas += [("assets", "assets")]                   # icon and header logo
+datas += [("shared/channels", "shared/channels")]  # built-in channel lists, shared with the phone apps
 
 a = Analysis(
     ["kawasaki_logger.py"],

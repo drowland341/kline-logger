@@ -6,11 +6,22 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * The user's channel list. Starts as a copy of the bundled pids.json and is saved back in the
- * desktop logger's format, so the file can be copied between the two apps.
+ * The user's channel list. Starts as a copy of the built-in channels (shared/channels in the repo) and
+ * is saved back in the desktop logger's format, so the file can be copied between the apps.
  */
 class ChannelStore(private val context: Context) {
     val file = File(context.getExternalFilesDir(null) ?: context.filesDir, PID_FILE)
+
+    private val bundled by lazy { JSONObject(readDefaults(context)) }
+
+    /**
+     * Raised in the shared channel file whenever the built-in channels change in a way users should pick
+     * up. Compared with the number saved in the user's pids.json to offer the new defaults once.
+     */
+    val defaultsRevision: Int get() = bundled.optInt("defaults_revision", 0)
+
+    /** What changed in the latest defaults, for the update offer. */
+    val defaultsNote: String get() = bundled.optString("defaults_note").ifEmpty { "corrected channel scalings" }
 
     /** The saved channels, or the bundled defaults if there is no saved file yet. */
     fun load(): List<PidDef> = if (file.exists()) parsePidDefs(file.readText()) else defaults()
@@ -22,15 +33,15 @@ class ChannelStore(private val context: Context) {
      * no stamp. No file, or one that can't be read, counts as current so it never triggers the update offer.
      */
     fun savedRevision(): Int = try {
-        if (file.exists()) JSONObject(file.readText()).optInt("defaults_revision", 0) else DEFAULTS_REVISION
+        if (file.exists()) JSONObject(file.readText()).optInt("defaults_revision", 0) else defaultsRevision
     } catch (e: Exception) {
-        DEFAULTS_REVISION
+        defaultsRevision
     }
 
     fun save(channels: List<PidDef>) {
         val doc = JSONObject()
             .put("_readme", JSONArray(README))
-            .put("defaults_revision", DEFAULTS_REVISION)
+            .put("defaults_revision", defaultsRevision)
             .put("pids", JSONArray(channels.map { it.toJson() }))
         val tmp = File(file.path + ".tmp")
         tmp.writeText(doc.toString(2))
@@ -41,12 +52,6 @@ class ChannelStore(private val context: Context) {
     }
 
     companion object {
-        // Raise whenever the bundled channels change in a way users should pick up. The app compares it
-        // with the number saved in the user's pids.json and offers the new defaults once if theirs is older.
-        const val DEFAULTS_REVISION = 2
-        const val DEFAULTS_NOTE = "RPM scaled to match the tach, intake pressure moved to the PID that " +
-            "actually changes, a new Oil Temp channel, and Battery switched back on"
-
         // Same header kline.py writes, so the desktop app sees a file it knows.
         private val README = listOf(
             "Channel definitions for kawasaki_logger.py. You can edit these in the app's Channels tab.",
