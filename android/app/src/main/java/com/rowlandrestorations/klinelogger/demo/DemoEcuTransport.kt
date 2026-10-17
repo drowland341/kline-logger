@@ -150,7 +150,7 @@ class DemoEcuTransport(
  * then back off to idle. Coolant warms from garage temperature toward operating temperature and
  * runs hot during the pulls, so the dashboard's warning colors get exercised.
  */
-private class EngineSim {
+internal class EngineSim {
     private val t0 = System.nanoTime()
     private val rnd = java.util.Random()
     private var lastT = 0.0
@@ -164,9 +164,9 @@ private class EngineSim {
 
     private fun noise(amount: Double) = rnd.nextGaussian() * amount
 
-    private class State(val rpm: Double, val tps: Double)
+    internal class State(val rpm: Double, val tps: Double)
 
-    private fun state(el: Double): State {
+    internal fun state(el: Double): State {
         val idle = 1250 + 25 * sin(el * 3)
         val t = el % 30
         return when {
@@ -190,7 +190,7 @@ private class EngineSim {
         lastT = el
         coolantC += (target - coolantC) * (1 - exp(-dt / 25)) * (if (coolantC < 70) 0.6 else 1.0)
         return when (pid) {
-            0x09 -> u16((s.rpm + noise(8.0)) / 4)                                  // 4 rpm per count, like the real ECU
+            0x09 -> u16((s.rpm + noise(8.0)).coerceIn(0.0, MAX_RPM) / 4)          // 4 rpm per count, like the real ECU
             0x04 -> u16(246 + (s.tps + noise(0.3)).coerceIn(0.0, 100.0) / 100 * 666)
             0x05 -> u16((40 + 57 * s.tps / 100 + noise(0.4)) / 0.124)            // ~40 kPa idle, ~97 kPa WOT
             0x08 -> u16(101.3 / 0.124)                                            // frozen duplicate, like the real ECU
@@ -207,6 +207,11 @@ private class EngineSim {
             }
             else -> static[pid]
         }
+    }
+
+    companion object {
+        // No jet ski engine gets near this; keeps the demo believable whatever the sweep does.
+        const val MAX_RPM = 10_000.0
     }
 
     private fun u16(v: Double): List<Int> {

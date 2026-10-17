@@ -24,4 +24,11 @@ class DemoEcuTransportTest {
         assertTrue("battery was $volts", volts in 12.0..15.0)
         assertTrue(link.alive())
     }
+
+    @Test
+    fun demoRpmStaysRealistic() {
+        val sim = EngineSim()
+        val peak = (0..3000).maxOf { sim.state(it / 100.0).rpm }      // one full 30 s cycle
+        assertTrue("demo peaked at $peak rpm", peak in 7000.0..EngineSim.MAX_RPM)
+    }
 }
