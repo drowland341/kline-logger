@@ -16,12 +16,19 @@ class DemoEcuTransportTest {
         assertEquals(0x11, info.start.ecu)
         assertEquals("accepted", info.diag)
 
-        val rpm = Formula("raw").eval(link.readLocalId(0x09))
+        val rpm = Formula("raw * 4").eval(link.readLocalId(0x09))
         assertTrue("idle rpm was $rpm", rpm in 1100.0..1400.0)
         val coolant = Formula("raw - 40").eval(link.readLocalId(0x06))
         assertTrue("coolant was $coolant", coolant in 15.0..30.0)
-        val volts = Formula("raw / 12.75").eval(link.readLocalId(0x0A))
+        val volts = Formula("raw / 51").eval(link.readLocalId(0x0A))
         assertTrue("battery was $volts", volts in 12.0..15.0)
         assertTrue(link.alive())
+    }
+
+    @Test
+    fun demoRpmStaysRealistic() {
+        val sim = EngineSim()
+        val peak = (0..3000).maxOf { sim.state(it / 100.0).rpm }      // one full 30 s cycle
+        assertTrue("demo peaked at $peak rpm", peak in 7000.0..EngineSim.MAX_RPM)
     }
 }

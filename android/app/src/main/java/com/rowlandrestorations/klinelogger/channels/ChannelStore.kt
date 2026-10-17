@@ -17,6 +17,16 @@ class ChannelStore(private val context: Context) {
 
     fun defaults(): List<PidDef> = loadPidDefs(context)
 
+    /**
+     * Like kline.py's pids_revision: the defaults revision stamped in the saved file, 0 for files with
+     * no stamp. No file, or one that can't be read, counts as current so it never triggers the update offer.
+     */
+    fun savedRevision(): Int = try {
+        if (file.exists()) JSONObject(file.readText()).optInt("defaults_revision", 0) else DEFAULTS_REVISION
+    } catch (e: Exception) {
+        DEFAULTS_REVISION
+    }
+
     fun save(channels: List<PidDef>) {
         val doc = JSONObject()
             .put("_readme", JSONArray(README))
@@ -30,15 +40,21 @@ class ChannelStore(private val context: Context) {
         }
     }
 
-    private companion object {
+    companion object {
+        // Raise whenever the bundled channels change in a way users should pick up. The app compares it
+        // with the number saved in the user's pids.json and offers the new defaults once if theirs is older.
+        const val DEFAULTS_REVISION = 2
+        const val DEFAULTS_NOTE = "RPM scaled to match the tach, intake pressure moved to the PID that " +
+            "actually changes, a new Oil Temp channel, and Battery switched back on"
+
         // Same header kline.py writes, so the desktop app sees a file it knows.
-        const val DEFAULTS_REVISION = 1
-        val README = listOf(
+        private val README = listOf(
             "Channel definitions for kawasaki_logger.py. You can edit these in the app's Channels tab.",
             "pid: hex local identifier sent as '21 <pid>'. every: read on every Nth update (1 = every time).",
             "formula variables: A B C D... (data bytes), raw, sraw, n, d. Functions: abs min max round signed(v,bits) math.*",
             "verified: set true once a channel's scaling has been checked against a known-good reading.",
             "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session.",
+            "priority: phone apps only. true re-reads the channel between every other channel read. Ignored by the Windows app.",
         )
     }
 }
@@ -54,3 +70,4 @@ fun PidDef.toJson(): JSONObject = JSONObject()
     .put("notes", notes)
     .put("gauge_min", gaugeMin ?: JSONObject.NULL)
     .put("gauge_max", gaugeMax ?: JSONObject.NULL)
+    .apply { if (priority) put("priority", true) }

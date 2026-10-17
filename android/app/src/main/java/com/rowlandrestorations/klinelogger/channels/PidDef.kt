@@ -15,6 +15,7 @@ data class PidDef(
     val notes: String,
     val gaugeMin: Double?,
     val gaugeMax: Double?,
+    val priority: Boolean = false,     // phone apps only: re-read between every other channel read (RPM)
 ) {
     fun decode(data: ByteArray): Double = formula.eval(data)
 
@@ -43,6 +44,7 @@ fun parsePidDefs(json: String): List<PidDef> {
             notes = o.optString("notes"),
             gaugeMin = o.optDoubleOrNull("gauge_min"),
             gaugeMax = o.optDoubleOrNull("gauge_max"),
+            priority = o.optBoolean("priority", false),
         )
     }
 }
