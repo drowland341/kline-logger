@@ -15,22 +15,22 @@ Not affiliated with or endorsed by Kawasaki.
 ## Features
 
 - **Connect** — joins the adapter over Wi-Fi (`192.168.0.10:35000`), negotiates the K-line session, and shows the raw AT-command handshake log for troubleshooting.
-- **Live Data** — radial gauges for RPM and GPS speed, plus cards for every enabled channel in `pids.json` (throttle, intake pressure, temps, battery). A Speed Comparison card tracks two unconfirmed "might be the paddlewheel sensor" PIDs alongside real GPS speed.
+- **Live Data** — radial gauges for RPM and GPS speed, plus cards for every enabled channel in the channel list (throttle, intake pressure, temps, battery). A Speed Comparison card tracks two unconfirmed "might be the paddlewheel sensor" PIDs alongside real GPS speed.
 - **PID Scanner** — sweeps every local identifier (0x00-0xFF), shows which respond with their raw bytes, and supports a Watch mode (select PIDs, see live values + low/high) for identifying unknown sensors. Results export as a text report.
 - **Demo Mode** — simulated data for trying the UI without hardware.
-- **Research Logging** (developer setting, off by default) — logs every known channel, GPS speed, and chosen unknown PIDs together once per second, exportable as CSV, for correlating unknown PIDs with real sensor behavior. Intended for extending `pids.json` to other Kawasaki models.
+- **Research Logging** (developer setting, off by default) — logs every known channel, GPS speed, and chosen unknown PIDs together once per second, exportable as CSV, for correlating unknown PIDs with real sensor behavior. Intended for extending the shared channel list to other Kawasaki models.
 
 ## Project structure
 
 | Path | What it is |
 |---|---|
-| `KlineLogger/` | App source (SwiftUI views, `WiFiOBDManager` protocol/session logic, `FormulaEvaluator`, `PIDDefinition`, bundled `pids.json`) |
+| `KlineLogger/` | App source (SwiftUI views, `WiFiOBDManager` protocol/session logic, `FormulaEvaluator`, `PIDDefinition`) |
 | `KlineLogger.xcodeproj` | Xcode project |
 | `KlineLoggerTests/`, `KlineLoggerUITests/` | Test targets |
 
 ## Known PIDs
 
-`KlineLogger/pids.json` is kept in sync with the root-level `pids.json` used by the Windows app — both describe the same Kawasaki ECU local identifiers. If you add or confirm a channel on one platform, port the change to the other.
+The built-in channels come from [`../shared/channels/kawasaki.json`](../shared/channels/kawasaki.json), the same file the Windows and Android apps use. The Xcode project adds that folder to the app target, so an edit there reaches all three apps. See [`../shared/README.md`](../shared/README.md).
 
 ## Protocol notes
 
