@@ -79,6 +79,7 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
     val units by vm.units.collectAsState()
     val research by vm.research.collectAsState()
     val defaultsOffer by vm.defaultsOffer.collectAsState()
+    val logs by vm.logs.collectAsState()
     val gpsMph by vm.gps.mph.collectAsState()
     val gpsStatus by vm.gps.status.collectAsState()
     var editor by remember { mutableStateOf<EditorRequest?>(null) }
@@ -139,7 +140,12 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                     )
                     Screen.CODES -> CodesScreen(codes, connection, onRead = vm::readCodes, onClear = vm::clearCodes)
                     Screen.CONNECTION -> ConnectionScreen(
-                        connection, devices, units, recording, rawLog,
+                        connection, devices, units, recording, logs, vm.logStore.folderLabel,
+                        writingLogs = setOfNotNull(
+                            recording.log?.key?.takeIf { recording.active },
+                            research.log?.key?.takeIf { research.active },
+                        ),
+                        rawLog = rawLog,
                         onConnect = vm::connect,
                         onDisconnect = vm::disconnect,
                         onDemoMode = vm::setDemoMode,
@@ -149,6 +155,8 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                         onBleStop = vm::stopBleScanNow,
                         onUnits = vm::setUnits,
                         onClearLog = vm::clearRawLog,
+                        onRefreshLogs = vm::refreshLogs,
+                        onDeleteLog = vm::deleteLog,
                     )
                 }
             }
