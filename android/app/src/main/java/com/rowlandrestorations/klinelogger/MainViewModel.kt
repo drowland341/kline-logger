@@ -236,10 +236,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _research = MutableStateFlow(ResearchUi())
     val research: StateFlow<ResearchUi> = _research.asStateFlow()
 
-    /** Saved CSV logs (recordings, research logs, scan exports), newest first. */
-    private val _logs = MutableStateFlow<List<LogFile>>(emptyList())
-    val logs: StateFlow<List<LogFile>> = _logs.asStateFlow()
-
     /** True when the saved channel list predates the bundled defaults: offer the new ones once. */
     private val _defaultsOffer = MutableStateFlow(channelError == null && store.savedRevision() < ChannelStore.DEFAULTS_REVISION)
     val defaultsOffer: StateFlow<Boolean> = _defaultsOffer.asStateFlow()
@@ -277,6 +273,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = KLineSettings()
     /** CSV logs: Documents/KlineLogger on Android 10+, the app-private folder otherwise. */
     val logStore = LogStore(app)
+
+    /** Saved CSV logs (recordings, research logs, scan exports), newest first. */
+    private val _logs = MutableStateFlow<List<LogFile>>(emptyList())
+    val logs: StateFlow<List<LogFile>> = _logs.asStateFlow()
+
     private val saveLock = Mutex()
 
     private var session: Job? = null
