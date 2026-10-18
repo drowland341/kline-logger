@@ -29,7 +29,7 @@ When run from source, settings, channels and logs are kept in this folder.
 
 1. Install [Inno Setup 6](https://jrsoftware.org/isdl.php).
 2. With your Python environment active, run `build_windows.bat` in this folder. It installs PyInstaller, builds the app into `dist\KlineLogger`, then builds `installer\KlineLogger-Setup.exe`.
-3. If the built-in channels changed, also raise `DEFAULTS_REVISION` in `kline.py` and update `DEFAULTS_NOTE`, so existing users are offered the new defaults. For a new release, raise the version in two places: `APP_VERSION` in `kawasaki_logger.py` and `AppVersion` in `installer.iss`. Then attach the new installer to a GitHub Release, keeping the file name `KlineLogger-Setup.exe` and not marking it as a pre-release. The download link always serves the newest release.
+3. If the built-in channels changed, also raise `defaults_revision` and update `defaults_note` in `shared/channels/kawasaki.json`, so existing users of all three apps are offered the new defaults. For a new release, raise the version in two places: `APP_VERSION` in `kawasaki_logger.py` and `AppVersion` in `installer.iss`. Then attach the new installer to a GitHub Release, keeping the file name `KlineLogger-Setup.exe` and not marking it as a pre-release. The download link always serves the newest release.
 
 **Speed tip for FTDI cables:** Device Manager → Ports → USB Serial Port → Properties → Port Settings → Advanced → set Latency Timer to 1 ms. The default 16 ms adds a delay to every request.
 
@@ -102,7 +102,7 @@ Kawasaki ECUs ignore requests sent faster than roughly 50 ms apart, so the defau
 |---|---|
 | `kawasaki_logger.py` | The app (GUI) |
 | `kline.py` | Protocol, logging, scanner and the simulated ECU, no GUI code |
-| `pids.json` | Default channel list |
+| `shared/channels/` | Built-in channel lists, one per manufacturer, used by the Windows, iOS and Android apps (see `shared/README.md`) |
 | `selftest.py` | Checks the install against the simulated ECU |
 | `assets/` | App icon and header logo |
 | `KlineLogger.spec` | PyInstaller recipe for the Windows app |

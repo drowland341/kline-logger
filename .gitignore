@@ -10,6 +10,7 @@ venv/
 
 # Personal data: your COM port, chart picks and ski logs stay on your PC
 settings.json
+/pids.json
 logs/
 
 # Build output (attach installers to GitHub Releases instead of committing them)

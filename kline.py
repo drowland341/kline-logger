@@ -23,6 +23,7 @@ import math
 import os
 import queue
 import random
+import sys
 import threading
 import time
 import traceback
@@ -323,36 +324,23 @@ class PidDef:
         return float(eval(self._code, {"__builtins__": {}}, env))  # local tool, user-written formulas
 
 
-ULX_NOTE = "Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski."
+# Built-in channels live in shared/channels (one file per manufacturer), shared with the iOS and Android
+# apps. Raise defaults_revision there whenever they change in a way users should pick up: the app compares it
+# with the number saved in the user's pids.json and offers to reset once if theirs is older.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+CHANNELS_DIR = os.path.join(getattr(sys, "_MEIPASS", _HERE), "shared", "channels")
+DEFAULTS_PATH = os.path.join(CHANNELS_DIR, "kawasaki.json")
 
-DEFAULT_PIDS = [
-    PidDef("Engine RPM", 0x09, "raw", "rpm", True, 1, False,
-           "Assumes the 16-bit value is rpm. Not checked yet: it reads 00 00 with the engine off. At idle, "
-           "compare with the ski's tach and note the raw hex.", 0, 8000),
-    PidDef("Throttle sensor", 0x04, "max(0, min(100, (raw - 246) * 100 / (912 - 246)))", "%", True, 1, False,
-           "Ultra LX: closed = 246 and wide open = 912 counts (about 1.2 V and 4.5 V if 10-bit at 5 V). "
-           "Use Capture 0 % / 100 % in Edit to set your own ski's values.", 0, 100),
-    PidDef("Intake pressure", 0x08, "raw * 0.124", "kPa", True, 1, False,
-           "The PID returns counts, not kPa: 817 counts at key-on is about 101 kPa (3.99 V if 10-bit at 5 V). "
-           "0.124 kPa per count makes key-on read ambient. Check idle vacuum (about 35-45 kPa). The ECU's own "
-           "sensor curve would give the exact slope.", 0, 110),
-    PidDef("Engine temp", 0x06, "raw - 40", "°C", True, 10, False,
-           "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an "
-           "infrared thermometer once it's warm. Units of C make it switchable between C and F. "
-           + ULX_NOTE, 0, 105),
-    PidDef("Intake air temp", 0x07, "raw - 40", "°C", True, 10, False,
-           "Same encoding as engine temp. " + ULX_NOTE, 0, 70),
-    PidDef("Battery", 0x0A, "raw / 12.75", "V", False, 10, False,
-           "Switched off: PID 0x0A returned 00 00 on an Ultra LX with key on, so it isn't battery voltage there. "
-           "Use the PID scanner to find the right one (look for a value that jumps up when the engine runs).",
-           0, 20),
-]
 
-# Raise DEFAULTS_REVISION whenever the built-in channels change in a way users should pick up. The app
-# compares it with the number saved in the user's pids.json and offers to reset once if theirs is older.
-DEFAULTS_REVISION = 1
-DEFAULTS_NOTE = ("corrected readings for the Ultra LX, temperatures that follow the \u00b0F / \u00b0C switch, "
-                 "and the throttle shown as 0 to 100 %")
+def load_channel_defaults(path: str):
+    """-> (list of PidDef, defaults revision, note on what changed). Raises if the file is broken."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    return ([PidDef.from_dict(item) for item in doc["pids"]],
+            int(doc.get("defaults_revision", 0)), str(doc.get("defaults_note", "")))
+
+
+DEFAULT_PIDS, DEFAULTS_REVISION, DEFAULTS_NOTE = load_channel_defaults(DEFAULTS_PATH)
 
 PIDS_README = [
     "Channel definitions for kawasaki_logger.py. You can edit these in the app's Channels tab.",
@@ -1077,25 +1065,27 @@ class EngineSim:
         return rpm, tps, ect_c, iat_c
 
     def read(self, pid: int):
+        rpm, tps, ect_c, iat_c = self._state()
+        if pid == 0x98:                                                # oil runs hotter than the coolant
+            return int(round(ect_c * 1.5 + 40)).to_bytes(2, "big")
         if pid > 0x62:
             return None
-        rpm, tps, ect_c, iat_c = self._state()
         if pid == 0x09:
-            return int(rpm).to_bytes(2, "big")
+            return int(rpm / 4).to_bytes(2, "big")                     # 4 rpm per count, like the real ECU
         if pid == 0x04:
             return int(246 + tps / 100 * 666).to_bytes(2, "big")
-        if pid == 0x08:
+        if pid == 0x05:
             kpa = 40 + 57 * tps / 100 + 0.4 * math.sin(time.perf_counter() * 7)   # ~40 kPa idle, ~97 WOT
             return int(round(kpa / 0.124)).to_bytes(2, "big")
         if pid == 0x06:
             return int(round(ect_c + 40)).to_bytes(2, "big")
         if pid == 0x07:
             return int(round(iat_c + 40)).to_bytes(2, "big")
-        if pid == 0x05:
-            return int(round(101.3 / 0.124)).to_bytes(2, "big")
+        if pid == 0x08:
+            return int(round(101.3 / 0.124)).to_bytes(2, "big")       # frozen duplicate, like the real ECU
         if pid == 0x0A:
             volts = 14.1 if rpm > 2000 else 13.2                       # charging above idle
-            return bytes([int(round(volts * 12.75))])
+            return int(round(volts * 51)).to_bytes(2, "big")
         if pid == 0x1F:
             self.counter = (self.counter + 1) & 0xFF
             return bytes([self.counter])
