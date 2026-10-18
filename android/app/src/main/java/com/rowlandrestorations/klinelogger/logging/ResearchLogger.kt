@@ -5,7 +5,6 @@ import com.rowlandrestorations.klinelogger.kline.hexs
 import com.rowlandrestorations.klinelogger.rawValue
 import java.io.BufferedWriter
 import java.io.Closeable
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -16,7 +15,7 @@ import java.util.Locale
  * Written a row at a time and flushed, so a crash or a dead battery on the water keeps the run.
  */
 class ResearchLogger private constructor(
-    val file: File,
+    val log: LogFile,
     private val channels: List<PidDef>,
     private val pids: List<Int>,
     private val out: BufferedWriter,
@@ -42,11 +41,10 @@ class ResearchLogger private constructor(
     override fun close() = out.close()
 
     companion object {
-        fun start(dir: File, channels: List<PidDef>, pids: List<Int>, tag: String): ResearchLogger {
-            dir.mkdirs()
+        fun start(store: LogStore, channels: List<PidDef>, pids: List<Int>, tag: String): ResearchLogger {
             val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-            val file = File(dir, "research-${stamp}_$tag.csv")
-            val out = file.bufferedWriter()
+            val output = store.create("research-${stamp}_$tag.csv")
+            val out = output.stream.bufferedWriter()
             val header = listOf("time_s") +
                 channels.map { it.name.replace(",", " ") } +
                 "gps_mph" +
@@ -54,7 +52,7 @@ class ResearchLogger private constructor(
                 pids.map { "pid_0x%02X_dec".format(it) }
             out.write(header.joinToString(",") + "\n")
             out.flush()
-            return ResearchLogger(file, channels, pids, out)
+            return ResearchLogger(output.log, channels, pids, out)
         }
     }
 }

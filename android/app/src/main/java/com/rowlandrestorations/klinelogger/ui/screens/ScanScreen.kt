@@ -57,8 +57,8 @@ import com.rowlandrestorations.klinelogger.ScanUi
 import com.rowlandrestorations.klinelogger.channels.PidDef
 import com.rowlandrestorations.klinelogger.channels.parsePid
 import com.rowlandrestorations.klinelogger.ui.components.Sparkline
-import com.rowlandrestorations.klinelogger.ui.shareFile
-import java.io.File
+import com.rowlandrestorations.klinelogger.logging.LogFile
+import com.rowlandrestorations.klinelogger.ui.shareLog
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeLabel
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeNumerals
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeTheme
@@ -104,7 +104,7 @@ fun ScanScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { Controls(scan, connection, selected, onScan, onWatch, onStop, locked = research.active) }
-        if (scan.answering.isNotEmpty() || research.active || research.file != null) {
+        if (scan.answering.isNotEmpty() || research.active || research.log != null) {
             item { ResearchCard(scan, connection, research, selected, onResearchStart, onResearchStop) }
         }
         if (scan.rows.isNotEmpty()) {
@@ -212,7 +212,7 @@ private fun Toolbar(
     selectedCount: Int,
     onClearSelection: () -> Unit,
     onExport: () -> Unit,
-    exported: File?,
+    exported: LogFile?,
 ) {
     val context = LocalContext.current
     val chipColors = FilterChipDefaults.filterChipColors(
@@ -241,7 +241,7 @@ private fun Toolbar(
             )
             if (selectedCount > 0) TextButton(onClick = onClearSelection) { Text("CLEAR") }
             TextButton(onClick = onExport) { Text("EXPORT CSV") }
-            if (exported != null) TextButton(onClick = { shareFile(context, exported) }) { Text("SHARE") }
+            if (exported != null) TextButton(onClick = { shareLog(context, exported) }) { Text("SHARE") }
         }
     }
 }
@@ -358,7 +358,7 @@ private fun ResearchCard(
             Text("RESEARCH LOG", style = GaugeLabel, color = scheme.onSurfaceVariant)
             if (research.active) {
                 Text(
-                    "${research.rows} rows · ${research.pids.size} scanned PIDs · ${research.file?.name.orEmpty()}",
+                    "${research.rows} rows · ${research.pids.size} scanned PIDs · ${research.log?.name.orEmpty()}",
                     style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
                     color = GaugeTheme.status.critical,
                 )
@@ -383,9 +383,9 @@ private fun ResearchCard(
                         }
                     }
                 }
-                val file = research.file
-                if (file != null) {
-                    OutlinedButton(onClick = { shareFile(context, file) }) { Text("SHARE ${file.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                val log = research.log
+                if (log != null) {
+                    OutlinedButton(onClick = { shareLog(context, log) }) { Text("SHARE ${log.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
             research.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant) }

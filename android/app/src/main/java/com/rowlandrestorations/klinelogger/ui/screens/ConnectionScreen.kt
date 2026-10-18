@@ -29,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,6 +70,7 @@ import com.rowlandrestorations.klinelogger.RawLine
 import com.rowlandrestorations.klinelogger.RecordingUi
 import com.rowlandrestorations.klinelogger.elm.BtDevice
 import com.rowlandrestorations.klinelogger.kline.Direction
+import com.rowlandrestorations.klinelogger.logging.LogFile
 import com.rowlandrestorations.klinelogger.settings.AdapterKind
 import com.rowlandrestorations.klinelogger.settings.AdapterPrefs
 import com.rowlandrestorations.klinelogger.settings.PressureUnit
@@ -83,9 +85,12 @@ import com.rowlandrestorations.klinelogger.ui.components.linkLabel
 import com.rowlandrestorations.klinelogger.ui.hasPermissions
 import com.rowlandrestorations.klinelogger.ui.openSettings
 import com.rowlandrestorations.klinelogger.ui.rememberPermissionRequest
-import com.rowlandrestorations.klinelogger.ui.shareFile
+import com.rowlandrestorations.klinelogger.ui.shareLog
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeLabel
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeTheme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ConnectionScreen(
@@ -93,6 +98,9 @@ fun ConnectionScreen(
     devices: DevicesUi,
     units: UnitPrefs,
     recording: RecordingUi,
+    logs: List<LogFile>,
+    logFolder: String,
+    writingLogs: Set<String>,      // keys of logs being written now: no Delete
     rawLog: List<RawLine>,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
@@ -103,8 +111,11 @@ fun ConnectionScreen(
     onBleStop: () -> Unit,
     onUnits: (UnitPrefs) -> Unit,
     onClearLog: () -> Unit,
+    onRefreshLogs: () -> Unit,
+    onDeleteLog: (LogFile) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    LaunchedEffect(Unit) { onRefreshLogs() }      // pick up files added or removed in the Files app
     Column(
         modifier
             .fillMaxSize()
@@ -119,6 +130,7 @@ fun ConnectionScreen(
             DemoToggle(connection, onDemoMode)
             connection.ecu?.let { EcuCard(connection) }
             RecordingCard(recording)
+            LogsCard(logs, logFolder, writingLogs, onDeleteLog)
             UnitsCard(units, onUnits)
             RawLogPanel(rawLog, onClearLog)
             Text(
@@ -407,23 +419,92 @@ private fun RecordingCard(recording: RecordingUi) {
         Column(Modifier.padding(20.dp)) {
             Text("CSV LOG", style = GaugeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(6.dp))
-            Text(
-                if (recording.active) "Recording to ${recording.fileName}"
-                else "Saved ${recording.savedRows ?: 0} rows to ${recording.fileName}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (recording.active) GaugeTheme.status.critical else GaugeTheme.status.ok,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (recording.active) "Recording to ${recording.fileName}"
+                    else "Saved ${recording.savedRows ?: 0} rows to ${recording.fileName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (recording.active) GaugeTheme.status.critical else GaugeTheme.status.ok,
+                    modifier = Modifier.weight(1f),
+                )
+                val log = recording.log
+                if (!recording.active && log != null) {
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { shareLog(context, log) }) { Text("SHARE") }
+                }
+            }
             recording.folder?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = GaugeTheme.status.faint)
-            }
-            val file = recording.file
-            if (!recording.active && file != null) {
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = { shareFile(context, file) }) { Text("SHARE CSV") }
             }
         }
     })
 }
+
+/** Every saved CSV (recordings, research logs, scan exports), each with Share and Delete. */
+@Composable
+private fun LogsCard(logs: List<LogFile>, folder: String, busy: Set<String>, onDelete: (LogFile) -> Unit) {
+    val context = LocalContext.current
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf<LogFile?>(null) }
+    SectionCard(content = {
+        Column(Modifier.padding(20.dp)) {
+            Text("LOGS", style = GaugeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (logs.isEmpty()) "No logs yet. Recordings, research logs and scan exports are saved to $folder."
+                else "${logs.size} saved. New logs go to $folder" +
+                    if (folder.startsWith("Documents")) ", where the Files app can see them." else ".",
+                style = MaterialTheme.typography.bodySmall,
+                color = GaugeTheme.status.faint,
+            )
+            val shown = if (showAll) logs else logs.take(LOGS_SHOWN)
+            for (log in shown) {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(log.name, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), maxLines = 2)
+                        Text(
+                            "${formatSize(log.sizeBytes)} · ${formatDate(log.modifiedMs)}" + if (log.inDocuments) "" else " · app folder",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = GaugeTheme.status.faint,
+                        )
+                    }
+                    val writing = log.key in busy
+                    TextButton(onClick = { shareLog(context, log) }) { Text("SHARE") }
+                    IconButton(onClick = { confirm = log }, enabled = !writing) {
+                        Icon(Icons.Filled.Delete, contentDescription = if (writing) "Recording, can't delete" else "Delete ${log.name}")
+                    }
+                }
+            }
+            if (logs.size > LOGS_SHOWN) {
+                TextButton(onClick = { showAll = !showAll }) { Text(if (showAll) "SHOW FEWER" else "SHOW ALL ${logs.size}") }
+            }
+        }
+    })
+    confirm?.let { log ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Delete log?") },
+            text = { Text("${log.name} will be deleted from this device. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(log)
+                    confirm = null
+                }) { Text("DELETE", color = GaugeTheme.status.critical) }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("CANCEL") } },
+        )
+    }
+}
+
+private const val LOGS_SHOWN = 5
+
+private fun formatSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "%.1f KB".format(Locale.US, bytes / 1024.0)
+    else -> "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024))
+}
+
+private fun formatDate(ms: Long): String = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(ms))
 
 /** Display units, each picked on its own. Logs always keep the native units. */
 @Composable

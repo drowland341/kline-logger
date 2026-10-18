@@ -40,6 +40,8 @@ import com.rowlandrestorations.klinelogger.elm.pairedDevices
 import com.rowlandrestorations.klinelogger.elm.scanBle
 import com.rowlandrestorations.klinelogger.location.GpsSpeed
 import com.rowlandrestorations.klinelogger.logging.CsvRecorder
+import com.rowlandrestorations.klinelogger.logging.LogFile
+import com.rowlandrestorations.klinelogger.logging.LogStore
 import com.rowlandrestorations.klinelogger.logging.ResearchLogger
 import com.rowlandrestorations.klinelogger.settings.AdapterKind
 import com.rowlandrestorations.klinelogger.settings.AdapterPrefs
@@ -66,7 +68,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.io.Closeable
-import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -115,7 +116,7 @@ data class ResearchUi(
     val active: Boolean = false,
     val pids: List<Int> = emptyList(),
     val rows: Int = 0,
-    val file: File? = null,
+    val log: LogFile? = null,
     val message: String? = null,
 )
 
@@ -130,9 +131,8 @@ data class RecordingUi(
     val fileName: String? = null,
     val folder: String? = null,
     val savedRows: Int? = null,
-) {
-    val file: File? get() = if (fileName != null && folder != null) File(folder, fileName) else null
-}
+    val log: LogFile? = null,
+)
 
 enum class ScanMode { IDLE, SCANNING, WATCHING }
 
@@ -174,7 +174,7 @@ data class ScanUi(
     val rows: Map<Int, ScanRow> = emptyMap(),
     val watching: List<Int> = emptyList(),
     val sampleHz: Double = 0.0,
-    val exported: File? = null,
+    val exported: LogFile? = null,
     val message: String = "Scan a range of PIDs to see everything this ECU answers. Live data pauses while the scanner runs.",
 ) {
     val answering: List<ScanRow> get() = rows.values.filter { it.result == ScanResult.ANSWERS }.sortedBy { it.pid }
@@ -236,6 +236,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _research = MutableStateFlow(ResearchUi())
     val research: StateFlow<ResearchUi> = _research.asStateFlow()
 
+    /** Saved CSV logs (recordings, research logs, scan exports), newest first. */
+    private val _logs = MutableStateFlow<List<LogFile>>(emptyList())
+    val logs: StateFlow<List<LogFile>> = _logs.asStateFlow()
+
     /** True when the saved channel list predates the bundled defaults: offer the new ones once. */
     private val _defaultsOffer = MutableStateFlow(channelError == null && store.savedRevision() < ChannelStore.DEFAULTS_REVISION)
     val defaultsOffer: StateFlow<Boolean> = _defaultsOffer.asStateFlow()
@@ -271,7 +275,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val usb = app.getSystemService(Context.USB_SERVICE) as UsbManager
     private val settings = KLineSettings()
-    private val logDir = File(app.getExternalFilesDir(null) ?: app.filesDir, "logs")
+    /** CSV logs: Documents/KlineLogger on Android 10+, the app-private folder otherwise. */
+    val logStore = LogStore(app)
     private val saveLock = Mutex()
 
     private var session: Job? = null
@@ -474,11 +479,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 val tag = if (_connection.value.demoSession) "demo" else "ski"
-                val r = CsvRecorder.start(logDir, _channels.value, tag)
+                val r = CsvRecorder.start(logStore, _channels.value, tag)
                 recorder = r
                 _recording.value = RecordingUi(
-                    active = true, startedAt = SystemClock.elapsedRealtime(), fileName = r.file.name, folder = logDir.path,
+                    active = true, startedAt = SystemClock.elapsedRealtime(), fileName = r.log.name, folder = logStore.folderLabel, log = r.log,
                 )
+                refreshLogs()
             } catch (e: IOException) {
                 _connection.update { it.copy(status = "Couldn't start the CSV log: ${e.message}", ok = false) }
             }
@@ -511,12 +517,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(serial) {
             try {
                 val tag = if (_connection.value.demoSession) "demo" else "ski"
-                researchLog = ResearchLogger.start(logDir, _channels.value, extras, tag)
+                researchLog = ResearchLogger.start(logStore, _channels.value, extras, tag)
                 researchPids = extras
                 _research.value = ResearchUi(
-                    active = true, pids = extras, file = researchLog?.file,
+                    active = true, pids = extras, log = researchLog?.log,
                     message = "Logging ${_channels.value.size} channels, GPS speed and ${extras.size} scanned PIDs once a second.",
                 )
+                refreshLogs()
             } catch (e: IOException) {
                 _research.update { it.copy(message = "Couldn't start the research log: ${e.message}") }
             }
@@ -537,9 +544,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: IOException) {
         }
         _research.value = ResearchUi(
-            rows = r.rows, file = r.file,
-            message = (reason?.let { "$it " } ?: "") + "Saved ${r.rows} rows to ${r.file.name}.",
+            rows = r.rows, log = r.log,
+            message = (reason?.let { "$it " } ?: "") + "Saved ${r.rows} rows to ${r.log.name}.",
         )
+        refreshLogs()
+    }
+
+    // --- saved logs ---------------------------------------------------------------
+
+    /** Re-reads the log folders, e.g. when the Connection screen opens (files may have gone via the Files app). */
+    fun refreshLogs() {
+        viewModelScope.launch(Dispatchers.IO) { _logs.value = logStore.list() }
+    }
+
+    /** Deletes a saved log. The one being written right now can't be deleted. */
+    fun deleteLog(log: LogFile) {
+        if (log.key == recorder?.log?.key || log.key == researchLog?.log?.key) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!logStore.delete(log)) {
+                _connection.update { it.copy(status = "Couldn't delete ${log.name}. Try the Files app.", ok = false) }
+            }
+            _logs.value = logStore.list()
+        }
     }
 
     // --- GPS ----------------------------------------------------------------------
@@ -647,12 +673,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val s = _scan.value
         if (s.rows.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
-            var exported: File? = null
+            var exported: LogFile? = null
             val msg = try {
-                logDir.mkdirs()
                 val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-                val file = File(logDir, "pid_scan_$stamp.csv")
-                file.bufferedWriter().use { w ->
+                val output = logStore.create("pid_scan_$stamp.csv")
+                output.stream.bufferedWriter().use { w ->
                     w.write("pid,result,bytes,first,last,value,low,high,swing_pct,changes\n")
                     for (r in s.rows.values.sortedBy { it.pid }) {
                         w.write(
@@ -667,12 +692,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                 }
-                exported = file
-                "Saved the scan to ${file.name}."
+                exported = output.log
+                "Saved the scan to ${output.log.name}."
             } catch (e: IOException) {
                 "Couldn't save the scan: ${e.message}"
             }
             _scan.update { it.copy(message = msg, exported = exported) }
+            refreshLogs()
         }
     }
 
@@ -992,7 +1018,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             r.close()
         } catch (_: IOException) {
         }
-        _recording.value = RecordingUi(fileName = r.file.name, folder = logDir.path, savedRows = r.rows)
+        _recording.value = RecordingUi(fileName = r.log.name, folder = logStore.folderLabel, savedRows = r.rows, log = r.log)
+        refreshLogs()
     }
 
     private fun logTraffic(dir: Direction, data: ByteArray) {

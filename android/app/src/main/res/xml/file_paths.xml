@@ -3,4 +3,6 @@
 <paths>
     <external-files-path name="logs" path="logs/" />
     <files-path name="internal_logs" path="logs/" />
+    <!-- Copies of Documents/KlineLogger logs, so shares keep the real file name. -->
+    <cache-path name="shared_logs" path="share/" />
 </paths>
