@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Checks the protocol code against the simulated ECU. Run: python selftest.py  (no ski or cable needed)"""
+import os
 import time
 
 import kline as kl
@@ -11,6 +12,14 @@ def main():
     assert kl.hexs(kl.build_frame(0x11, 0xF1, [0x10, 0x80])) == "80 11 F1 02 10 80 14"
     assert kl.hexs(kl.build_frame(0x11, 0xF1, [0x21, 0x09])) == "80 11 F1 02 21 09 AE"
     print("Frame building ........ ok")
+
+    # Every channel list in shared/channels (also read by the iOS and Android apps) must load.
+    for name in sorted(os.listdir(kl.CHANNELS_DIR)):
+        if name.endswith(".json"):
+            pids, rev, note = kl.load_channel_defaults(os.path.join(kl.CHANNELS_DIR, name))
+            assert pids and rev > 0 and note, f"{name}: needs channels, defaults_revision and defaults_note"
+            assert len({p.pid for p in pids}) == len(pids), f"{name}: duplicate PIDs"
+    print("Shared channel lists .. ok")
 
     for method in ("break", "360baud"):
         link = kl.KLine(dict(kl.DEFAULT_SETTINGS, port=kl.DEMO_PORT, init_method=method))
@@ -26,6 +35,10 @@ def main():
     link = kl.KLine(dict(kl.DEFAULT_SETTINGS, port=kl.DEMO_PORT))
     link.open()
     link.start_session()
+    for p in kl.DEFAULT_PIDS:          # the demo ECU speaks the same scalings as the built-in channels
+        v = p.decode(link.read_local_id(p.pid))
+        assert (p.gauge_min or 0) <= v <= (p.gauge_max or v), f"{p.name}: demo reads {v:.1f} {p.units}"
+    print("Demo vs defaults ...... ok")
     t0, n = time.perf_counter(), 0
     while time.perf_counter() - t0 < 1.5:
         link.read_local_id(0x09)

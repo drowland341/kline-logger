@@ -17,6 +17,9 @@ import androidx.compose.ui.unit.dp
 import com.rowlandrestorations.klinelogger.ConnectionUi
 import com.rowlandrestorations.klinelogger.Reading
 import com.rowlandrestorations.klinelogger.channels.PidDef
+import com.rowlandrestorations.klinelogger.settings.LocalUnits
+import com.rowlandrestorations.klinelogger.settings.convert
+import com.rowlandrestorations.klinelogger.settings.label
 import com.rowlandrestorations.klinelogger.ui.components.ArcGauge
 import com.rowlandrestorations.klinelogger.ui.components.GaugeCard
 import com.rowlandrestorations.klinelogger.ui.components.GaugeSpec
@@ -35,7 +38,7 @@ private val BATTERY = GaugeSpec(
     thresholds = Thresholds(warnLow = 12.2, critLow = 11.5, warnHigh = 15.0, critHigh = 15.5),
 )
 private val THROTTLE = GaugeSpec(0x04, "THROTTLE", 0.0, 100.0)
-private val MAP = GaugeSpec(0x08, "MAP", 0.0, 110.0)
+private val MAP = GaugeSpec(0x05, "MAP", 0.0, 110.0)
 private val CARDS = listOf(COOLANT, BATTERY, THROTTLE, MAP)
 
 @Composable
@@ -47,7 +50,21 @@ fun DashboardScreen(
     modifier: Modifier = Modifier,
 ) {
     val byPid = channels.associateBy { it.pid }
-    fun units(spec: GaugeSpec) = byPid[spec.pid]?.displayUnits.orEmpty()
+    val prefs = LocalUnits.current
+    fun native(spec: GaugeSpec) = byPid[spec.pid]?.units.orEmpty()
+    fun units(spec: GaugeSpec) = prefs.label(byPid[spec.pid]?.displayUnits.orEmpty())
+    fun value(spec: GaugeSpec) = readings[spec.pid]?.value?.let { prefs.convert(it, native(spec)) }
+
+    // Gauge ranges and limits are written in the channel's native units (°C, kPa): convert them with the value.
+    fun shown(spec: GaugeSpec): GaugeSpec {
+        val n = native(spec)
+        fun c(v: Double?) = v?.let { prefs.convert(it, n) }
+        val t = spec.thresholds
+        return spec.copy(
+            min = prefs.convert(spec.min, n), max = prefs.convert(spec.max, n),
+            thresholds = Thresholds(c(t.warnHigh), c(t.critHigh), c(t.warnLow), c(t.critLow)),
+        )
+    }
     fun caption(spec: GaugeSpec): String? {
         val ch = byPid[spec.pid] ?: return "PID 0x%02X not in pids.json".format(spec.pid)
         readings[spec.pid]?.error?.let { return it }
@@ -55,7 +72,7 @@ fun DashboardScreen(
     }
 
     @Composable
-    fun Card(spec: GaugeSpec, m: Modifier) = GaugeCard(spec, readings[spec.pid]?.value, units(spec), m, caption(spec))
+    fun Card(spec: GaugeSpec, m: Modifier) = GaugeCard(shown(spec), value(spec), units(spec), m, caption(spec))
 
     Column(modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         banner()
@@ -65,12 +82,12 @@ fun DashboardScreen(
             if (maxWidth > maxHeight) {
                 // Landscape (handlebar mount): tach on the left, 2x2 cards on the right.
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                    TachPanel(readings[RPM.pid]?.value, units(RPM), Modifier.weight(1f).fillMaxHeight())
+                    TachPanel(value(RPM), units(RPM), Modifier.weight(1f).fillMaxHeight())
                     CardGrid(Modifier.weight(1.15f).fillMaxHeight(), gap) { spec, m -> Card(spec, m) }
                 }
             } else {
                 Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
-                    TachPanel(readings[RPM.pid]?.value, units(RPM), Modifier.fillMaxWidth().weight(1.1f))
+                    TachPanel(value(RPM), units(RPM), Modifier.fillMaxWidth().weight(1.1f))
                     CardGrid(Modifier.fillMaxWidth().weight(1f), gap) { spec, m -> Card(spec, m) }
                 }
             }

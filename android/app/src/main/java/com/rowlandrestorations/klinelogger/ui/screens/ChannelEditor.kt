@@ -219,6 +219,7 @@ fun ChannelEditor(
                                 notes = original?.notes ?: request.notes,
                                 gaugeMin = original?.gaugeMin,
                                 gaugeMax = original?.gaugeMax,
+                                priority = original?.priority ?: false,
                             )
                             error = onSave(original?.pid, ch)
                             if (error == null) onDismiss()

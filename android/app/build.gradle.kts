@@ -18,6 +18,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // The built-in channel lists (one JSON file per manufacturer) are shared with the iOS and Windows apps.
+    sourceSets["main"].assets.srcDir("../../shared/channels")
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -53,6 +56,7 @@ dependencies {
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.usb.serial)
     testImplementation(libs.junit)
+    testImplementation(libs.json)      // real org.json for unit tests (Android's is a stub off-device)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

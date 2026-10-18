@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -23,7 +24,9 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -42,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rowlandrestorations.klinelogger.LinkState
 import com.rowlandrestorations.klinelogger.MainViewModel
 import com.rowlandrestorations.klinelogger.R
+import com.rowlandrestorations.klinelogger.settings.LocalUnits
 import com.rowlandrestorations.klinelogger.ui.components.LiveDataBanner
 import com.rowlandrestorations.klinelogger.ui.components.StatusBar
 import com.rowlandrestorations.klinelogger.ui.screens.ChannelEditor
@@ -71,11 +75,19 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
     val scan by vm.scan.collectAsState()
     val channels by vm.channels.collectAsState()
     val codes by vm.codes.collectAsState()
+    val devices by vm.devices.collectAsState()
+    val units by vm.units.collectAsState()
+    val research by vm.research.collectAsState()
+    val defaultsOffer by vm.defaultsOffer.collectAsState()
+    val gpsMph by vm.gps.mph.collectAsState()
+    val gpsStatus by vm.gps.status.collectAsState()
     var editor by remember { mutableStateOf<EditorRequest?>(null) }
     var screen by rememberSaveable { mutableStateOf(Screen.DASHBOARD) }
 
     KeepScreenOn(connection.state == LinkState.CONNECTED)
+    LaunchedEffect(Unit) { if (vm.gps.hasPermission()) vm.startGps() }
 
+    CompositionLocalProvider(LocalUnits provides units) {
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -107,13 +119,16 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                 when (s) {
                     Screen.DASHBOARD -> DashboardScreen(channels, readings, connection, banner)
                     Screen.LIVE_DATA -> LiveDataScreen(
-                        channels, readings, connection, banner,
+                        channels, readings, connection, banner, gpsMph, gpsStatus,
+                        onEnableGps = vm::startGps,
                         onEdit = { editor = EditorRequest(it, it.pid) },
                         onAdd = { editor = EditorRequest(null, null) },
                         onReset = vm::resetChannels,
                     )
                     Screen.SCAN -> ScanScreen(
-                        scan, connection, channels,
+                        scan, connection, channels, research,
+                        onResearchStart = vm::startResearchLog,
+                        onResearchStop = vm::stopResearchLog,
                         onScan = vm::startScan,
                         onWatch = vm::watch,
                         onStop = vm::stopScan,
@@ -124,10 +139,15 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                     )
                     Screen.CODES -> CodesScreen(codes, connection, onRead = vm::readCodes, onClear = vm::clearCodes)
                     Screen.CONNECTION -> ConnectionScreen(
-                        connection, recording, rawLog,
+                        connection, devices, units, recording, rawLog,
                         onConnect = vm::connect,
                         onDisconnect = vm::disconnect,
                         onDemoMode = vm::setDemoMode,
+                        onAdapter = vm::setAdapter,
+                        onRefreshPaired = vm::refreshPairedDevices,
+                        onBleScan = vm::startBleScan,
+                        onBleStop = vm::stopBleScanNow,
+                        onUnits = vm::setUnits,
                         onClearLog = vm::clearRawLog,
                     )
                 }
@@ -144,7 +164,9 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                 onDismiss = { editor = null },
             )
         }
+        defaultsOffer?.let { DefaultsOfferDialog(note = it, onAnswer = vm::answerDefaultsOffer) }
         BrandIntro()
+    }
     }
 }
 
@@ -178,4 +200,22 @@ private fun BrandIntro() {
             Text("K-Line Logger", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
         }
     }
+}
+
+/** After an update with new default channels, asks once whether to take them (like the desktop app). */
+@Composable
+private fun DefaultsOfferDialog(note: String, onAnswer: (Boolean) -> Unit) {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("New default channels") },
+        text = {
+            Text(
+                "This version has updated default channels: $note.\n\n" +
+                    "Replace your channel list with the new defaults? Choose Keep Mine if you added channels or " +
+                    "calibrated the throttle yourself. You can still restore the defaults any time from Live Data.",
+            )
+        },
+        confirmButton = { TextButton(onClick = { onAnswer(true) }) { Text("USE NEW DEFAULTS") } },
+        dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text("KEEP MINE") } },
+    )
 }

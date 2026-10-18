@@ -4,8 +4,9 @@
 //
 //  Created by Douglas Rowland on 10/5/26.
 //
-//  Channel definitions ported from drowland341/kline-logger's pids.json,
-//  which was reverse-engineered against a 2007 Kawasaki Ultra LX ECU.
+//  Channel definitions from the repo's shared/channels folder (one JSON file per
+//  manufacturer), shared with the Windows and Android apps. The Kawasaki list was
+//  reverse-engineered against a 2007 Kawasaki Ultra LX ECU.
 
 import Foundation
 
@@ -69,8 +70,12 @@ private struct PIDDefinitionFile: Codable {
 }
 
 enum PIDLibrary {
+    /// Built-in channel list in the app bundle, from shared/channels/<name>.json
+    /// (added to the target as a synchronized folder in the Xcode project).
+    static let defaultChannels = "kawasaki"
+
     static let all: [PIDDefinition] = {
-        guard let url = Bundle.main.url(forResource: "pids", withExtension: "json") else { return [] }
+        guard let url = Bundle.main.url(forResource: defaultChannels, withExtension: "json") else { return [] }
         guard let data = try? Data(contentsOf: url) else { return [] }
         guard let file = try? JSONDecoder().decode(PIDDefinitionFile.self, from: data) else { return [] }
         return file.pids
