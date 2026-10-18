@@ -236,9 +236,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _research = MutableStateFlow(ResearchUi())
     val research: StateFlow<ResearchUi> = _research.asStateFlow()
 
-    /** True when the saved channel list predates the bundled defaults: offer the new ones once. */
-    private val _defaultsOffer = MutableStateFlow(channelError == null && store.savedRevision() < ChannelStore.DEFAULTS_REVISION)
-    val defaultsOffer: StateFlow<Boolean> = _defaultsOffer.asStateFlow()
+    /** What changed, when the saved channel list predates the built-in defaults: offer the new ones once. */
+    private val _defaultsOffer = MutableStateFlow(
+        if (channelError == null && store.savedRevision() < store.defaultsRevision) store.defaultsNote else null,
+    )
+    val defaultsOffer: StateFlow<String?> = _defaultsOffer.asStateFlow()
 
     private val _readings = MutableStateFlow<Map<Int, Reading>>(emptyMap())
     val readings: StateFlow<Map<Int, Reading>> = _readings.asStateFlow()
@@ -577,7 +579,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Answer to the new-defaults offer: take the bundled channels, or keep the user's (and stop asking). */
     fun answerDefaultsOffer(useNew: Boolean) {
-        _defaultsOffer.value = false
+        _defaultsOffer.value = null
         if (useNew) resetChannels() else commitChannels(_channels.value, emptySet())   // re-saving stamps the current revision
     }
 
