@@ -1,0 +1,121 @@
+{
+  "_readme": [
+    "Channels and findings for a 2024 Kawasaki SX-R 160 (1498 cc, naturally aspirated). Same format as kawasaki.json; see shared/README.md. The apps still load kawasaki.json by default, so this file is the SXR160 reference until there is a model picker.",
+    "Everything here was seen on one ski, on the trailer, out of the water, with two ECUs: one with a Maptuner tune and one with stock factory calibration (logs 2026-10-16 and 2026-10-21). Nothing is verified against a meter or gauge yet.",
+    "Protocol: the same KWP2000 requests as the Ultra LX. Session 10 80; read codes 13 01 -> 53 <count> <hi> <lo>... (current faults); clear codes 14 01 -> 7F 14 78 (response pending), then 54. 14 FF 00, 14 00 00 and 14 FF FF are refused as the wrong format (7F 14 12). SecurityAccess 27 01 -> 7F 27 33 (denied); no key is ever sent.",
+    "Constant on both ECUs, meaning unknown: 0x00 = DF CF 86 06, 0x01 = 05, 0x20 = C3 D5 40 18, 0x40 = 3F FF F4 04, 0x5E = 03 3B (827), 0x60 = 00 E0 00 00, 0x80 = 00 00 8F 00, 0xA0 = 10 00 00 00, 0xC0 = 00 1E 1C 08 (stock ECU). 0x03 is refused (7F 21 12).",
+    "Status flags, stock ECU, 2026-10-21: 0x02 went from 04 40 to 44 40 after a run with the intake pressure sensor unplugged and stayed 44 40 after clearing codes. 0x28 and 0x56 went 00 -> 01, 0x6B 00 20 -> 00 30 and 0x91 40 40 -> 40 41 during the hot restart after the sensor was plugged back in. Not decoded."
+  ],
+  "manufacturer": "Kawasaki",
+  "model": "SX-R 160 (2024)",
+  "protocol": "kawasaki-kwp2000",
+  "defaults_revision": 1,
+  "defaults_note": "First SX-R 160 channel list, from the 2026-10-16 and 2026-10-21 trailer logs",
+  "pids": [
+    {
+      "name": "Engine RPM",
+      "pid": "0x09",
+      "formula": "raw * 4",
+      "units": "rpm",
+      "enabled": true,
+      "every": 1,
+      "priority": true,
+      "verified": false,
+      "notes": "Same as the Ultra LX. Seen: cranking 236-860; idle 1060-1630 (tuned ECU, cold) and 1030-1340 (stock ECU, intake pressure sensor plugged in); 1390-1920 at idle with the sensor unplugged; free revs to 4364, 7000 and 7820 out of the water.",
+      "gauge_min": 0.0,
+      "gauge_max": 8000.0
+    },
+    {
+      "name": "Throttle sensor",
+      "pid": "0x04",
+      "formula": "max(0, min(100, (raw - 247) * 100 / (885 - 247)))",
+      "units": "%",
+      "enabled": true,
+      "every": 1,
+      "priority": true,
+      "verified": false,
+      "notes": "Closed = 247 counts (idle reads 247-249 with the engine running), 884-885 at full lever travel in a hand sweep with the engine off (2026-10-16), and 885 again in a hand sweep on the stock ECU (2026-10-21), so 885 is full lever travel. One quick blip read 737. RPM climbs before this channel moves on a blip, so it may be the lever sensor rather than the throttle valve; not confirmed.",
+      "gauge_min": 0.0,
+      "gauge_max": 100.0
+    },
+    {
+      "name": "Intake Pressure",
+      "pid": "0x05",
+      "formula": "raw * 0.124",
+      "units": "kPa",
+      "enabled": true,
+      "every": 3,
+      "verified": false,
+      "notes": "The ECU's pressure value, not raw sensor voltage: with the sensor unplugged and the engine running it holds a fixed 819 counts (101.6 kPa, about one standard atmosphere; if that is exactly 101.325 the scale is 0.1237) and sets P1101. Engine off: 103.7-103.9 kPa (tuned ECU) and 103.0-103.3 (stock ECU), back within a second of each shutdown. Idle: 80-94 kPa (tuned ECU, cold) and 88-97 kPa (stock ECU), rising as it warmed. Closed-throttle decel from 4000-7800 rpm: 42-47 kPa. The ski idles rough and runs cleaner with the sensor unplugged (fueling then comes from throttle and rpm), and 4 sensors read the same, so the sensor is probably right and the engine really is pulling little vacuum at idle. Next: a mechanical vacuum gauge at idle, a hand vacuum pump on the sensor with the app connected, and a check of the 5 V reference and sensor ground at the connector.",
+      "gauge_min": 0.0,
+      "gauge_max": 110.0
+    },
+    {
+      "name": "Baro (key-on)",
+      "pid": "0x08",
+      "formula": "raw * 0.124",
+      "units": "kPa",
+      "enabled": true,
+      "every": 20,
+      "verified": false,
+      "notes": "Holds one value for the whole session while 0x05 moves: 836 counts (103.7 kPa) on the tuned ECU, 832-833 (103.2-103.3 kPa) on the stock ECU. Looks like the barometric pressure the ECU takes from the intake pressure sensor before the engine starts. 103.2 kPa is unusually high, so compare it with a phone barometer's station pressure to check the sensor chain's absolute accuracy.",
+      "gauge_min": 80.0,
+      "gauge_max": 110.0
+    },
+    {
+      "name": "Engine temp",
+      "pid": "0x06",
+      "formula": "raw - 40",
+      "units": "°C",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Same encoding as the Ultra LX. Ambient 20 C at key-on (2026-10-16). Climbs fast out of the water: 20 -> 76 C in about 1.5 minutes of total running (2026-10-21, tuned ECU) and 40 -> 110 C in one session (stock ECU), and keeps rising for a minute or so after each shutdown (heat soak).",
+      "gauge_min": 0.0,
+      "gauge_max": 120.0
+    },
+    {
+      "name": "IAT",
+      "pid": "0x07",
+      "formula": "raw - 40",
+      "units": "°C",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "Same encoding as the Ultra LX. Read 20-24 C in every log so far, barely moving through the runs.",
+      "gauge_min": 0.0,
+      "gauge_max": 70.0
+    },
+    {
+      "name": "Oil Temp",
+      "pid": "0x98",
+      "formula": "raw - 40",
+      "units": "°C",
+      "enabled": true,
+      "every": 10,
+      "verified": false,
+      "notes": "The SX-R 160's oil temp sensor has a different part number from the Ultra LX's, so the scaling may differ. With raw - 40 it reads 20 C at key-on and rises slowly: 21-22 C in the short runs, 26 -> 33 C over a session where engine temp went 40 -> 110 C. On the Ultra LX, 0x98 drops to the ECU's 60 C fail-safe with its sensor unplugged, so it is the ECU's converted value there; whether raw - 40 is right here needs an infrared thermometer on the oil tank once warm.",
+      "gauge_min": 0.0,
+      "gauge_max": 150.0
+    },
+    {
+      "name": "Battery",
+      "pid": "0x0A",
+      "formula": "raw / 51",
+      "units": "V",
+      "enabled": true,
+      "every": 5,
+      "verified": false,
+      "notes": "Reads 0 with the engine stopped, like the Ultra LX, so 0 V at key-on is normal. 9.7-12.1 V cranking, 11.6-12.6 V while struggling to restart hot, 12.9-13.9 V at idle, 14.3 V at 4300 rpm and above.",
+      "gauge_min": 10.0,
+      "gauge_max": 16.0
+    }
+  ],
+  "codes": [
+    {"code": 12, "meter": "bOSt", "dtc": "P1101", "dtcVerified": true, "title": "Inlet air pressure sensor",
+     "problem": "Inlet air pressure sensor malfunction, wiring open or short",
+     "causes": ["Sensor connector unplugged or corroded", "Vacuum hose off, cracked or blocked", "Broken/shorted signal wire", "Loss of 5 V sensor supply or sensor ground", "Failed sensor"],
+     "ecuPins": [],
+     "failSafe": "Seen 2026-10-21 (stock ECU, sensor unplugged, engine running): the ECU holds intake pressure at 101.6 kPa and fuels from throttle and rpm. The ski idled higher and cleaner this way. Service code 12 and the meter text are from the Ultra LX manual; check them against the SX-R 160 manual."}
+  ]
+}

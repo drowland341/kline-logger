@@ -6,6 +6,7 @@ fixed here is fixed everywhere. There is one file per manufacturer:
 | File | Manufacturer | Protocol |
 |---|---|---|
 | `channels/kawasaki.json` | Kawasaki | KWP2000 over K-line (`21 <pid>` reads, ECU at 0x11 or 0x28) |
+| `channels/kawasaki_sxr160.json` | Kawasaki SX-R 160 (2024) | Same protocol. SXR160 readings, notes and the codes seen on it, kept for reference; the apps still load `kawasaki.json` |
 
 How each app picks the file up:
 
