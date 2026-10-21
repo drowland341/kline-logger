@@ -5,13 +5,13 @@
     "formula variables: A B C D... (data bytes), raw, sraw, n, d. Functions: abs min max round signed(v,bits) math.*",
     "verified: set true once a channel's scaling has been checked against a known-good reading.",
     "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session.",
-    "priority: phone apps only. true re-reads the channel between every other channel read, for gauges that need to track faster than 'every' alone allows. Ignored by the Windows app.",
+    "priority: phone apps only. true reads the channel on every update, ahead of the rest, for gauges that need to track faster than 'every' alone allows. Ignored by the Windows app.",
     "defaults_revision: raise it when these channels change in a way users should pick up; defaults_note says what changed. Apps that keep an editable copy offer the new defaults once."
   ],
   "manufacturer": "Kawasaki",
   "protocol": "kawasaki-kwp2000",
-  "defaults_revision": 2,
-  "defaults_note": "RPM scaled to match the tach, intake pressure moved to the PID that actually changes, a new Oil Temp channel, and Battery switched back on",
+  "defaults_revision": 4,
+  "defaults_note": "Throttle now updates as fast as RPM (intake pressure, battery and the temperatures are read less often to make room), and Intake air temp is now called IAT",
   "pids": [
     {
       "name": "Engine RPM",
@@ -33,8 +33,9 @@
       "units": "%",
       "enabled": true,
       "every": 1,
+      "priority": true,
       "verified": false,
-      "notes": "Ultra LX: closed = 246 and wide open = 912 counts (about 1.2 V and 4.5 V if 10-bit at 5 V). Use Capture 0 % / 100 % in Edit to set your own ski's values. Carries over to a 2024 SXR160: a 2026-10-16 key-on/engine-off log moving the throttle lever by hand 0-100% read 247 counts closed and 884-885 at full lever travel, close enough to the Ultra LX's 246/912 that no formula change is needed. 884-885 may be short of true mechanical WOT since this was a hand sweep with the engine off, not a full-throttle pull under load.",
+      "notes": "Ultra LX: closed = 246 and wide open = 912 counts (about 1.2 V and 4.5 V if 10-bit at 5 V). Use Capture 0 % / 100 % in Edit to set your own ski's values. Carries over to a 2024 SXR160: a 2026-10-16 key-on/engine-off log moving the throttle lever by hand 0-100% read 247 counts closed and 884-885 at full lever travel, close enough to the Ultra LX's 246/912 that no formula change is needed. 884-885 may be short of true mechanical WOT since this was a hand sweep with the engine off, not a full-throttle pull under load. 2026-10-21 SXR160 idle/rev log: 247-248 counts at idle with the engine running (shows 0.15-0.30 %), 737 on a quick blip to 4300 rpm. Set your own closed value with Capture 0 % if the idle offset bothers you.",
       "gauge_min": 0.0,
       "gauge_max": 100.0
     },
@@ -44,9 +45,9 @@
       "formula": "raw * 0.124",
       "units": "kPa",
       "enabled": true,
-      "every": 1,
+      "every": 3,
       "verified": false,
-      "notes": "This ski has only one physical pressure sensor (in the intake manifold) — no separate barometric sensor. PID 0x05 is that live reading: in a 2026-10-13 idle/rev research log it read ~101.7 kPa at key-on/engine-off (atmospheric), dropped to ~58 kPa once the engine started and settled into idle (manifold vacuum), then rose to ~79 kPa during a rev to 4284 rpm (vacuum partially collapsing). PID 0x08 previously held this channel but was found frozen at a constant 101.8 kPa for the entire session regardless of engine/RPM state — a dead/duplicate register — and was removed. every bumped from 10 to 1 since this is a fast-changing signal, not a slow one like true barometric pressure. Also checks out on a 2024 SXR160: a 2026-10-16 key-on/engine-off log read 836-837 counts (103.66-103.79 kPa, a sane atmospheric value), and 0x08 again mirrored 0x05 exactly at every sample — the same dead/duplicate-register pattern as the Ultra LX. Still need an idle/rev or water-test log on this ski to confirm 0x05 actually drops into vacuum range once the engine runs.",
+      "notes": "This ski has only one physical pressure sensor (in the intake manifold) — no separate barometric sensor. PID 0x05 is that live reading: in a 2026-10-13 idle/rev research log it read ~101.7 kPa at key-on/engine-off (atmospheric), dropped to ~58 kPa once the engine started and settled into idle (manifold vacuum), then rose to ~79 kPa during a rev to 4284 rpm (vacuum partially collapsing). PID 0x08 previously held this channel but was found frozen at a constant 101.8 kPa for the entire session regardless of engine/RPM state — a dead/duplicate register — and was removed. every bumped from 10 to 1 since this is a fast-changing signal, not a slow one like true barometric pressure, then set to 3 (2026-10-19) so RPM and throttle get more of the bus. Also checks out on a 2024 SXR160: a 2026-10-16 key-on/engine-off log read 836-837 counts (103.66-103.79 kPa, a sane atmospheric value), and 0x08 again mirrored 0x05 exactly at every sample — the same dead/duplicate-register pattern as the Ultra LX. Still need an idle/rev or water-test log on this ski to confirm 0x05 actually drops into vacuum range once the engine runs. Confirmed 2026-10-21 (SXR160, on the trailer, cold, 20-30 s runs): 103.7 kPa engine off, 71-78 kPa just after each start, then 80-94 kPa at a 1060-1630 rpm idle; one sample of 47 kPa about 0.3 s after a blip to 4300 rpm. 0x08 stayed at 836 counts (103.7 kPa) while 0x05 moved, so on this ski 0x08 looks like a stored barometric reading rather than a mirror. The idle values are well above the ~58 kPa idle in the 2026-10-13 log; whether that is the cold, short runs, electronic throttle idle control or something on this ski is not known yet. Needs a warm idle log to compare.",
       "gauge_min": 0.0,
       "gauge_max": 110.0
     },
@@ -58,19 +59,19 @@
       "enabled": true,
       "every": 10,
       "verified": false,
-      "notes": "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an infrared thermometer once it's warm. Units of C make it switchable between C and F. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski. A 2026-10-13 water test on another ski showed this channel staying a sane 59-70 C through a sustained 6000+ rpm run while that ski threw an OILH (oil temp high) warning — so on that ECU at least, 0x06 is not the oil sensor; see PID 0x98 below. Also read a sane ambient value on a 2024 SXR160 at key-on/engine-off (60 counts = 20 C, 2026-10-16 log) — consistent with this formula, though unconfirmed under heat on this ski.",
+      "notes": "Reads degrees C plus 40 (62 = 22 C = 72 F in a 70 F garage). One point only: check against an infrared thermometer once it's warm. Units of C make it switchable between C and F. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski. A 2026-10-13 water test on another ski showed this channel staying a sane 59-70 C through a sustained 6000+ rpm run while that ski threw an OILH (oil temp high) warning — so on that ECU at least, 0x06 is not the oil sensor; see PID 0x98 below. Also read a sane ambient value on a 2024 SXR160 at key-on/engine-off (60 counts = 20 C, 2026-10-16 log) — consistent with this formula, though unconfirmed under heat on this ski. 2026-10-21 SXR160 idle runs: rose 20 -> 76 C over about 1.5 minutes of total running on the trailer, and kept climbing for a minute or so after each shutdown (heat soak).",
       "gauge_min": 0.0,
       "gauge_max": 105.0
     },
     {
-      "name": "Intake air temp",
+      "name": "IAT",
       "pid": "0x07",
       "formula": "raw - 40",
       "units": "°C",
       "enabled": true,
       "every": 10,
       "verified": false,
-      "notes": "Same encoding as engine temp. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski. Also sane on a 2024 SXR160 at key-on/engine-off (61 counts = 21 C, 2026-10-16 log).",
+      "notes": "Intake Air Temperature (renamed from Intake air temp, 2026-10-19). Same encoding as engine temp. Seen on a 2007 Ultra LX with key on and engine off. Check on your own ski. Also sane on a 2024 SXR160 at key-on/engine-off (61 counts = 21 C, 2026-10-16 log).",
       "gauge_min": 0.0,
       "gauge_max": 70.0
     },
@@ -80,9 +81,9 @@
       "formula": "raw - 40",
       "units": "°C",
       "enabled": true,
-      "every": 1,
+      "every": 10,
       "verified": false,
-      "notes": "Found via the full-scan Research Log, not in the original kline.py defaults. In a 2026-10-13 water test, this ski threw an OILH (oil temp high) dash warning and backed off from a sustained ~6200 rpm / 42 mph cruise to idle at t=117s, never recovering for the rest of the session. PID 0x98, decoded with the same raw-40 convention as 0x06/0x07, climbed 142C -> 135C -> 153C over that same run, peaking right as the warning apparently hit — while 0x06 ('Engine temp') stayed a boring 59-70C the whole time. Also at t=116.8s, PID 0x02 flipped one bit (0x40->0x42 in its first byte) and latched there for the rest of the session, which looks like a fault/status flag turning on at the same moment. Strong circumstantial case for 0x98 = oil temperature, but unverified — confirm with an infrared thermometer at the oil tank/cooler next time OILH comes on, watching this channel live. At key-on/engine-off on a 2024 SXR160 (2026-10-16), 0x98 read 60 counts (20 C) — the same as Engine temp at that instant, which is expected before the engine runs and doesn't yet distinguish oil from coolant on this ski. Needs a running log to separate them, the way the Ultra LX water test did.",
+      "notes": "Found via the full-scan Research Log, not in the original kline.py defaults. In a 2026-10-13 water test, this ski threw an OILH (oil temp high) dash warning and backed off from a sustained ~6200 rpm / 42 mph cruise to idle at t=117s, never recovering for the rest of the session. PID 0x98, decoded with the same raw-40 convention as 0x06/0x07, climbed 142C -> 135C -> 153C over that same run, peaking right as the warning apparently hit — while 0x06 ('Engine temp') stayed a boring 59-70C the whole time. Also at t=116.8s, PID 0x02 flipped one bit (0x40->0x42 in its first byte) and latched there for the rest of the session, which looks like a fault/status flag turning on at the same moment. Strong circumstantial case for 0x98 = oil temperature, but unverified — confirm with an infrared thermometer at the oil tank/cooler next time OILH comes on, watching this channel live. At key-on/engine-off on a 2024 SXR160 (2026-10-16), 0x98 read 60 counts (20 C) — the same as Engine temp at that instant, which is expected before the engine runs and doesn't yet distinguish oil from coolant on this ski. Needs a running log to separate them, the way the Ultra LX water test did. 2026-10-21, Ultra LX: unplugging the oil temp sensor dropped 0x98 from 99 C to exactly 60 C (the manual's oil-temp fail-safe value) and set P1112; plugging it back in returned 99 C. That ties 0x98 to the oil sensor. The same ski reads 99 C stone cold at 20 C ambient in every log, which points to that ski's sensor or wiring reading high, not the formula. On the SXR160 (same day) 0x98 tracked ambient (21-22 C) through short idle runs. The SXR160 has its own oil temp sensor with a different part number from the Ultra LX's, so its scaling may differ. 0x98 should be the ECU's already-converted temperature (the fail-safe 60 C came out exactly with raw - 40), which would make the formula the same on both and leave sensor differences to each ECU's calibration, but that is unproven: check the SXR160 against an infrared thermometer once it is warm. Same check on the Ultra LX: if its oil tank is cold while 0x98 shows 99 C, the sensor or wiring is bad (or the wrong part is fitted).",
       "gauge_min": 0.0,
       "gauge_max": 180.0
     },
@@ -92,9 +93,9 @@
       "formula": "raw / 51",
       "units": "V",
       "enabled": true,
-      "every": 1,
+      "every": 5,
       "verified": false,
-      "notes": "Re-enabled with a corrected divisor. Previously switched off because PID 0x0A returned 00 00 on an Ultra LX at key-on, and a short 2026-10-13 idle/rev research log on another ski showed it 'frozen' right up to engine shutoff — but 0x0A wasn't a defined/polled channel at the time, so it was only sampled once via the slow extra-PID sweep, not actually confirmed static. A later water-test research log, with 0x0A re-read many times over a 2+ minute ride, shows it tracking RPM: raw 695 (13.63 V) at a 6100 rpm cruise, dropping to raw 654-668 (12.82-13.10 V) at idle, rising again on the next cruise — a charging-system signature (alternator output rises with RPM), and raw/51 lands it right in the 13.0-13.7 V range expected while running. Still just a 4-point fit, not calibrated — confirm against a multimeter on the battery terminals next time out. At key-on/engine-off on a 2024 SXR160 (2026-10-16), 0x0A read 0 too, same as the Ultra LX at key-on — consistent so far, but this ski hasn't been run with 0x0A enabled yet to check the raw/51 scaling against RPM.",
+      "notes": "Re-enabled with a corrected divisor. Previously switched off because PID 0x0A returned 00 00 on an Ultra LX at key-on, and a short 2026-10-13 idle/rev research log on another ski showed it 'frozen' right up to engine shutoff — but 0x0A wasn't a defined/polled channel at the time, so it was only sampled once via the slow extra-PID sweep, not actually confirmed static. A later water-test research log, with 0x0A re-read many times over a 2+ minute ride, shows it tracking RPM: raw 695 (13.63 V) at a 6100 rpm cruise, dropping to raw 654-668 (12.82-13.10 V) at idle, rising again on the next cruise — a charging-system signature (alternator output rises with RPM), and raw/51 lands it right in the 13.0-13.7 V range expected while running. Still just a 4-point fit, not calibrated — confirm against a multimeter on the battery terminals next time out. At key-on/engine-off on a 2024 SXR160 (2026-10-16), 0x0A read 0 too, same as the Ultra LX at key-on — consistent so far, but this ski hasn't been run with 0x0A enabled yet to check the raw/51 scaling against RPM. A 2026-10-19 key-on log on the Android tablet backs up the 'only while the engine turns' pattern: 0x0A read 0 at key-on/engine-off, then 11.59 V while cranking (288 rpm), 9.02 V at the cranking dip and 11.63 V right after, and back to 0 once cranking stopped. So 0 V at key-on is normal for this ECU, not a dead battery; the channel looks live once the engine turns over. 2026-10-21 SXR160 idle/rev log: 9.7-12.1 V cranking, 13.4-13.9 V at idle, 14.27 V at 4300 rpm, 0 with the engine off. The raw/51 scaling fits a charging system on this ski too.",
       "gauge_min": 10.0,
       "gauge_max": 16.0
     }

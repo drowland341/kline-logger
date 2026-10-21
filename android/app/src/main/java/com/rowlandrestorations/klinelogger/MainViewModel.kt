@@ -3,7 +3,10 @@ package com.rowlandrestorations.klinelogger
 import android.app.Application
 import android.content.Context
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.SystemClock
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -43,10 +46,14 @@ import com.rowlandrestorations.klinelogger.logging.CsvRecorder
 import com.rowlandrestorations.klinelogger.logging.LogFile
 import com.rowlandrestorations.klinelogger.logging.LogStore
 import com.rowlandrestorations.klinelogger.logging.ResearchLogger
+import com.rowlandrestorations.klinelogger.logging.TrafficRecorder
+import com.rowlandrestorations.klinelogger.vehicle.VehicleImage
 import com.rowlandrestorations.klinelogger.settings.AdapterKind
 import com.rowlandrestorations.klinelogger.settings.AdapterPrefs
 import com.rowlandrestorations.klinelogger.settings.AppPrefs
+import com.rowlandrestorations.klinelogger.settings.DashStyle
 import com.rowlandrestorations.klinelogger.settings.UnitPrefs
+import com.rowlandrestorations.klinelogger.settings.isKpa
 import com.rowlandrestorations.klinelogger.usb.UsbSerialTransport
 import com.rowlandrestorations.klinelogger.usb.requestUsbPermission
 import kotlinx.coroutines.CancellationException
@@ -132,6 +139,7 @@ data class RecordingUi(
     val folder: String? = null,
     val savedRows: Int? = null,
     val log: LogFile? = null,
+    val trafficLog: LogFile? = null,    // the raw bus traffic written alongside the CSV
 )
 
 enum class ScanMode { IDLE, SCANNING, WATCHING }
@@ -230,6 +238,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _units = MutableStateFlow(prefs.units())
     val units: StateFlow<UnitPrefs> = _units.asStateFlow()
 
+    /** Intake pressure last read with the engine stopped: the atmosphere the vacuum/boost display measures from. */
+    private val _atmosphere = MutableStateFlow<Double?>(null)
+    val atmosphere: StateFlow<Double?> = _atmosphere.asStateFlow()
+
+    private val _dashStyle = MutableStateFlow(prefs.dashStyle())
+    val dashStyle: StateFlow<DashStyle> = _dashStyle.asStateFlow()
+
     /** Phone GPS speed, for Live Data and the research log (the ECU has no working speed channel). */
     val gps = GpsSpeed(app)
 
@@ -312,6 +327,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Touched only on the serial thread.
     private var recorder: CsvRecorder? = null
+    private var traffic: TrafficRecorder? = null     // every bus frame, written alongside the CSV while recording
     private var researchLog: ResearchLogger? = null
     private var sessionStart = 0L
     private var misses = 0
@@ -481,17 +497,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             try {
-                val tag = if (_connection.value.demoSession) "demo" else "ski"
-                val r = CsvRecorder.start(logStore, _channels.value, tag)
-                recorder = r
-                _recording.value = RecordingUi(
-                    active = true, startedAt = SystemClock.elapsedRealtime(), fileName = r.log.name, folder = logStore.folderLabel, log = r.log,
-                )
-                refreshLogs()
+                startRecorder()
             } catch (e: IOException) {
-                _connection.update { it.copy(status = "Couldn't start the CSV log: ${e.message}", ok = false) }
+                stopRecorder()
+                _connection.update { it.copy(status = "Couldn't start the log: ${e.message}", ok = false) }
             }
         }
+    }
+
+    private fun sessionTag() = if (_connection.value.demoSession) "demo" else "ski"
+
+    /** One recording, two files: the channel values (CSV) and every request and reply on the bus (traffic). */
+    @Throws(IOException::class)
+    private fun startRecorder() {
+        val r = CsvRecorder.start(logStore, _channels.value, sessionTag())
+        recorder = r
+        val t = TrafficRecorder.start(logStore, sessionTag(), sessionStart)
+        traffic = t
+        _recording.value = RecordingUi(
+            active = true, startedAt = SystemClock.elapsedRealtime(), fileName = r.log.name, folder = logStore.folderLabel,
+            log = r.log, trafficLog = t.log,
+        )
+        refreshLogs()
     }
 
     fun clearRawLog() {
@@ -501,6 +528,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setUnits(u: UnitPrefs) {
         prefs.saveUnits(u)
         _units.value = u
+    }
+
+    fun setDashStyle(s: DashStyle) {
+        prefs.saveDashStyle(s)
+        _dashStyle.value = s
+    }
+
+    // --- the rider's ski picture (Digital dashboard) -----------------------------
+
+    private val _vehicle = MutableStateFlow<ImageBitmap?>(null)
+    val vehicle: StateFlow<ImageBitmap?> = _vehicle.asStateFlow()
+    private val _vehicleFlip = MutableStateFlow(prefs.vehicleFlip())
+    val vehicleFlip: StateFlow<Boolean> = _vehicleFlip.asStateFlow()
+
+    init {
+        loadVehicle()
+    }
+
+    private fun loadVehicle() {
+        viewModelScope.launch(Dispatchers.IO) { _vehicle.value = VehicleImage.load(getApplication())?.asImageBitmap() }
+    }
+
+    /** Imports a picture from the photo picker: background cut out, trimmed, saved for next time. */
+    fun importVehicle(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _vehicle.value = VehicleImage.import(getApplication(), uri).asImageBitmap()
+            } catch (e: Exception) {
+                _connection.update { it.copy(status = "Couldn't use that picture: ${e.message}", ok = false) }
+            }
+        }
+    }
+
+    fun flipVehicle() {
+        val flip = !_vehicleFlip.value
+        prefs.saveVehicleFlip(flip)
+        _vehicleFlip.value = flip
+    }
+
+    /** Back to the built-in drawing. */
+    fun clearVehicle() {
+        viewModelScope.launch(Dispatchers.IO) {
+            VehicleImage.clear(getApplication())
+            _vehicle.value = null
+        }
     }
 
     // --- research log -----------------------------------------------------------
@@ -562,7 +634,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Deletes a saved log. The one being written right now can't be deleted. */
     fun deleteLog(log: LogFile) {
-        if (log.key == recorder?.log?.key || log.key == researchLog?.log?.key) return
+        if (log.key == recorder?.log?.key || log.key == researchLog?.log?.key || log.key == traffic?.log?.key) return
         viewModelScope.launch(Dispatchers.IO) {
             if (!logStore.delete(log)) {
                 _connection.update { it.copy(status = "Couldn't delete ${log.name}. Try the Files app.", ok = false) }
@@ -726,18 +798,109 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         "$n code(s)" + (parsed.warning?.let { ", $it" } ?: "")
     }
 
-    fun clearCodes() = codeRequest("Clear codes", DtcProtocol.CLEAR_REQUEST, "Clearing codes…", afterSuccess = ::readCodes) {
-        _codes.update { it.copy(codes = emptyList(), ok = true, message = "Codes cleared. Reading again to confirm…") }
-        "cleared"
+    /**
+     * Tries every form in [DtcProtocol.CLEAR_FORMS], first in the normal 10 80 session and then in each of
+     * [DtcProtocol.CLEAR_SESSIONS] the ECU accepts, asking for a security seed in each (never sending a key) to
+     * see whether it wants unlocking. Always switches back to 10 80 afterwards, then reads the codes again.
+     */
+    fun clearCodes() {
+        val link = activeLink
+        if (link == null || _connection.value.state != LinkState.CONNECTED) {
+            _codes.update { it.copy(message = "Connect to the ECU first.", ok = false) }
+            return
+        }
+        if (_codes.value.busy) return
+        _codes.update { it.copy(busy = true, ok = null, message = "Clearing codes…", exchanges = emptyList()) }
+        viewModelScope.launch(serial) {
+            val sessions = listOf(DtcProtocol.NORMAL_SESSION) + DtcProtocol.CLEAR_SESSIONS
+            var cleared: String? = null
+            var silent = 0
+            val notes = mutableListOf<String>()
+            fun send(label: String, payload: ByteArray): Pair<ByteArray?, Int?> {
+                val frames = mutableListOf<RawLine>()
+                capture = frames
+                var reply: ByteArray? = null
+                var nrc: Int? = null
+                val result = try {
+                    reply = link.request(payload)
+                    misses = 0
+                    silent = 0
+                    "ANSWERED"
+                } catch (e: NegativeResponseException) {
+                    silent = 0
+                    nrc = e.code
+                    "refused (${nrcName(e.code)})"
+                } catch (e: KLineException) {
+                    silent++
+                    e.message ?: "no answer"
+                } catch (e: IOException) {
+                    silent = CODE_GIVE_UP
+                    "cable problem: ${e.message}"
+                } finally {
+                    capture = null
+                }
+                val ex = CodeExchange(label, hexs(payload), reply?.let(::hexs) ?: nrc?.let { "7F %02X %02X".format(payload[0], it) } ?: "", result, frames.toList())
+                _codes.update { it.copy(exchanges = it.exchanges + ex) }
+                return reply to nrc
+            }
+            try {
+                sessions@ for (session in sessions) {
+                    if (activeLink !== link || silent >= CODE_GIVE_UP) break
+                    val name = "session %02X".format(session)
+                    _codes.update { it.copy(message = "Clearing codes… trying $name") }
+                    if (session != DtcProtocol.NORMAL_SESSION) {
+                        val (ok, nrc) = send("Start $name", byteArrayOf(0x10, session.toByte()))
+                        if (ok == null) {
+                            notes += "$name: " + (nrc?.let { nrcName(it) } ?: "no answer")
+                            continue
+                        }
+                    }
+                    val (seed, seedNrc) = send("Seed request in $name", DtcProtocol.SEED_REQUEST)
+                    notes += "$name: " + when {
+                        seed != null -> "accepted, wants unlocking (seed ${hexs(seed.drop(2).toByteArray())})"
+                        seedNrc != null -> "accepted, seed ${nrcName(seedNrc)}"
+                        else -> "accepted"
+                    }
+                    for (form in DtcProtocol.CLEAR_FORMS) {
+                        val (ok, _) = send("Clear in $name", form)
+                        if (ok != null) {
+                            cleared = "${hexs(form)} in $name"
+                            break@sessions
+                        }
+                        if (silent >= CODE_GIVE_UP) break@sessions
+                    }
+                }
+            } finally {
+                // Back to the session the poller expects, whatever happened above.
+                if (activeLink === link) send("Back to session 80", byteArrayOf(0x10, DtcProtocol.NORMAL_SESSION.toByte()))
+            }
+            _codes.update {
+                it.copy(
+                    busy = false, ok = cleared != null,
+                    message = if (cleared != null) "Codes cleared with $cleared. Reading again to confirm…"
+                    else "No clear request accepted. " + notes.joinToString("; ") + ". See the debug section.",
+                )
+            }
+            if (cleared != null) readCodes()
+        }
     }
 
-    /**
-     * Sends [payload] between bus steps and records the exchange. [onReply] handles a positive answer and
-     * returns a summary; [afterSuccess] then runs once the request is no longer busy.
-     */
     private fun codeRequest(
         label: String,
         payload: ByteArray,
+        busyMessage: String,
+        afterSuccess: (() -> Unit)? = null,
+        onReply: (ByteArray) -> String,
+    ) = codeRequest(label, listOf(payload), busyMessage, afterSuccess, onReply)
+
+    /**
+     * Sends [payloads] between bus steps until the ECU accepts one, recording each exchange (the debug section
+     * keeps the last few; a traffic log keeps them all). [onReply] handles the positive answer and returns a
+     * summary; [afterSuccess] then runs once the request is no longer busy. Gives up early if the ECU goes quiet.
+     */
+    private fun codeRequest(
+        label: String,
+        payloads: List<ByteArray>,
         busyMessage: String,
         afterSuccess: (() -> Unit)? = null,
         onReply: (ByteArray) -> String,
@@ -750,31 +913,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_codes.value.busy) return
         _codes.update { it.copy(busy = true, ok = null, message = busyMessage) }
         viewModelScope.launch(serial) {
-            val frames = mutableListOf<RawLine>()
-            capture = frames
-            var response = ""
             var success = false
-            val result = try {
-                val resp = link.request(payload)
-                misses = 0
-                response = hexs(resp)
-                success = true
-                onReply(resp)
-            } catch (e: NegativeResponseException) {
-                response = "7F %02X %02X".format(e.sid, e.code)
-                _codes.update { it.copy(ok = false, message = "${e.message}. The ski may use a different service; see the debug section.") }
-                "refused (${nrcName(e.code)})"
-            } catch (e: KLineException) {
-                _codes.update { it.copy(ok = false, message = "No usable answer: ${e.message}") }
-                e.message ?: "no answer"
-            } catch (e: IOException) {
-                _codes.update { it.copy(ok = false, message = "Cable problem: ${e.message}") }
-                "cable problem"
-            } finally {
-                capture = null
+            var silentInARow = 0
+            val refusals = sortedMapOf<Int, Int>()      // refusal code -> how many, for the summary
+            for ((i, payload) in payloads.withIndex()) {
+                if (activeLink !== link) break
+                if (payloads.size > 1) _codes.update { it.copy(message = "$busyMessage (${i + 1} of ${payloads.size}: ${hexs(payload)})") }
+                val frames = mutableListOf<RawLine>()
+                capture = frames
+                var response = ""
+                val result = try {
+                    val resp = link.request(payload)
+                    misses = 0
+                    silentInARow = 0
+                    response = hexs(resp)
+                    success = true
+                    onReply(resp)
+                } catch (e: NegativeResponseException) {
+                    silentInARow = 0
+                    response = "7F %02X %02X".format(e.sid, e.code)
+                    refusals.merge(e.code, 1, Int::plus)
+                    "refused (${nrcName(e.code)})"
+                } catch (e: KLineException) {
+                    silentInARow++
+                    e.message ?: "no answer"
+                } catch (e: IOException) {
+                    silentInARow = CODE_GIVE_UP
+                    "cable problem: ${e.message}"
+                } finally {
+                    capture = null
+                }
+                val ex = CodeExchange(label, hexs(payload), response, result, frames.toList())
+                _codes.update { it.copy(exchanges = (listOf(ex) + it.exchanges).take(MAX_CODE_EXCHANGES)) }
+                if (success || silentInARow >= CODE_GIVE_UP) break
             }
-            val ex = CodeExchange(label, hexs(payload), response, result, frames.toList())
-            _codes.update { it.copy(busy = false, exchanges = (listOf(ex) + it.exchanges).take(MAX_CODE_EXCHANGES)) }
+            if (!success) {
+                val tried = if (payloads.size > 1) "Tried ${payloads.size} forms; none accepted" else "Not accepted"
+                val why = refusals.entries.joinToString(", ") { (code, n) -> "$n × ${nrcName(code)}" }
+                val msg = when {
+                    silentInARow >= CODE_GIVE_UP -> "The ECU stopped answering. See the debug section."
+                    why.isEmpty() -> "No usable answer. See the debug section."
+                    else -> "$tried ($why). See the debug section."
+                }
+                _codes.update { it.copy(ok = false, message = msg) }
+            }
+            _codes.update { it.copy(busy = false) }
             if (success) afterSuccess?.invoke()
         }
     }
@@ -801,7 +984,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val unsupported = HashSet<Int>()
         val raw = HashMap<Int, ByteArray>()     // latest bytes of every PID read, for the research log
         var cycle = 0L
-        var priorityPos = 0
+        val queued = ArrayDeque<Int>()          // non-priority PIDs that are due, read one per cycle
         var extraPos = 0
         var rateStart = System.nanoTime()
         var rateCycles = 0
@@ -823,6 +1006,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 Reading(null, history.toList(), "Formula error", data)
             } else {
                 st.latest[ch.pid] = v
+                if (isKpa(ch.units) && v in 60.0..110.0 && engineStopped(st)) _atmosphere.value = v
                 history.addLast(v.toFloat())
                 if (history.size > HISTORY) history.removeFirst()
                 Reading(v, history.toList(), raw = data)
@@ -837,6 +1021,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _readings.update { it + (ch.pid to reading) }
+    }
+
+    /** True when every RPM channel's latest reading is 0, so intake pressure is the atmosphere. */
+    private fun engineStopped(st: PollState): Boolean {
+        val rpm = _channels.value.filter { it.units.trim().lowercase() == "rpm" }.mapNotNull { st.latest[it.pid] }
+        return rpm.isNotEmpty() && rpm.all { it == 0.0 }
     }
 
     /** Runs the bus until cancelled or the ECU stops answering: polling channels, or scanning/watching. */
@@ -878,19 +1068,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (!link.alive()) throw NoResponseException("The ECU stopped answering. Check the key and the cable.")
             return
         }
-        // Priority channels (RPM) are re-read between every other read, so the tach tracks about twice as fast
-        // instead of waiting for the whole sweep. Same idea as the iOS app's pollStep.
+        // Priority channels (RPM, throttle) are read every cycle. The rest join a queue when their `every` comes
+        // round and are read one per cycle, so a cycle is never more than the priority reads plus one: the gauges
+        // keep their pace however many slow channels there are.
         val priority = channels.filter { it.priority && it.pid !in st.unsupported }
-        val due = channels.filter { !it.priority && it.pid !in st.unsupported && st.cycle % it.every == 0L }
-        val plan = ArrayList<PidDef>(due.size * 2 + priority.size)
-        if (priority.isEmpty()) {
-            plan += due
+        val others = channels.filter { !it.priority && it.pid !in st.unsupported }
+        val plan = if (priority.isEmpty()) {
+            others.filter { st.cycle % it.every == 0L }
         } else {
-            for (ch in due) {
-                plan += priority[st.priorityPos++ % priority.size]
-                plan += ch
+            for (ch in others) if (st.cycle % ch.every == 0L && ch.pid !in st.queued) st.queued.addLast(ch.pid)
+            var next: PidDef? = null
+            while (next == null && st.queued.isNotEmpty()) {
+                val pid = st.queued.removeFirst()
+                next = others.firstOrNull { it.pid == pid }   // skips channels deleted or made priority meanwhile
             }
-            if (due.isEmpty()) plan += priority
+            priority + listOfNotNull(next)
         }
         for (ch in plan) {
             if (busMode != BusMode.Poll) return          // the scanner took over mid-cycle
@@ -898,7 +1090,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             readChannel(link, ch, st)
             yield()
         }
-        // Research log: a few of the scanned PIDs per cycle, round-robin, so the gauges keep their pace.
+        // Research log: one scanned PID per cycle, round-robin, so the gauges keep their pace.
         val extras = researchPids.filter { pid -> channels.none { it.pid == pid } }
         repeat(minOf(EXTRAS_PER_CYCLE, extras.size)) {
             if (busMode != BusMode.Poll) return
@@ -1015,25 +1207,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun stopRecorder() {
+        stopTraffic()
         val r = recorder ?: return
         recorder = null
         try {
             r.close()
         } catch (_: IOException) {
         }
-        _recording.value = RecordingUi(fileName = r.log.name, folder = logStore.folderLabel, savedRows = r.rows, log = r.log)
+        _recording.value = RecordingUi(
+            fileName = r.log.name, folder = logStore.folderLabel, savedRows = r.rows, log = r.log, trafficLog = _recording.value.trafficLog,
+        )
         refreshLogs()
+    }
+
+    private fun stopTraffic() {
+        val t = traffic ?: return
+        traffic = null
+        try {
+            t.close()
+        } catch (_: IOException) {
+        }
     }
 
     private fun logTraffic(dir: Direction, data: ByteArray) {
         val line = RawLine((System.nanoTime() - logStart) / 1e9, dir, hexs(data))
         capture?.add(line)
         appendRawLine(line)
+        recordTraffic(dir, line.hex)
     }
 
     /** An ELM327 AT command and its answer, shown in the raw log between the frames. */
     private fun logNote(text: String) {
         appendRawLine(RawLine((System.nanoTime() - logStart) / 1e9, Direction.NOTE, text))
+        recordTraffic(Direction.NOTE, text)
+    }
+
+    /** Called on the serial thread, like every other bus callback. */
+    private fun recordTraffic(dir: Direction, data: String) {
+        val t = traffic ?: return
+        try {
+            t.write(dir, data)
+        } catch (e: IOException) {
+            stopTraffic()
+            _connection.update { it.copy(status = "Traffic log stopped: couldn't write the file (${e.message}). Channel CSV still recording.", ok = false) }
+        }
     }
 
     private fun appendRawLine(line: RawLine) {
@@ -1085,8 +1302,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val HISTORY = 120
         const val WATCH_HISTORY = 200
         private const val MAX_RAW_LINES = 400
-        private const val MAX_CODE_EXCHANGES = 6
-        private const val EXTRAS_PER_CYCLE = 4
+        private const val MAX_CODE_EXCHANGES = 8
+        private const val CODE_GIVE_UP = 5           // unanswered code requests in a row before giving up
+        private const val EXTRAS_PER_CYCLE = 1
         private const val RESEARCH_INTERVAL_S = 1.0
         private val PERMANENT_NRCS = setOf(0x11, 0x12, 0x31)
     }

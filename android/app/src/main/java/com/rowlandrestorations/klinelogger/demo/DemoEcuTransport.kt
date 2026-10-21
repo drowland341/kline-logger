@@ -42,7 +42,7 @@ class DemoEcuTransport(
     private var lastReply = 0L
 
     // Stored fault codes (water temp sensor, oil pressure), as the hex-digit DTC numbers Kawasaki uses.
-    private val storedCodes = mutableListOf(0x0014, 0x0072)
+    private val storedCodes = mutableListOf(0x0340, 0x0524)     // P0340 cam sensor, P0524 oil pressure
 
     override fun setBaudRate(baud: Int) {
         baudRate = baud
@@ -111,7 +111,7 @@ class DemoEcuTransport(
                 !session -> listOf(0x7F, sid, 0x22)
                 else -> sim.read(arg)?.let { listOf(0x61, arg) + it } ?: listOf(0x7F, sid, 0x12)
             }
-            DtcProtocol.readSid -> listOf(0x58, storedCodes.size) + storedCodes.flatMap { listOf(it shr 8, it and 0xFF, 0xE0) }
+            DtcProtocol.readSid -> listOf(0x53, storedCodes.size) + storedCodes.flatMap { listOf(it shr 8, it and 0xFF) }
             DtcProtocol.clearSid -> {
                 storedCodes.clear()
                 listOf(0x54) + p.drop(1).map { it.toInt() and 0xFF }

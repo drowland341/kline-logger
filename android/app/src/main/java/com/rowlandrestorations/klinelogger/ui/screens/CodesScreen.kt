@@ -180,7 +180,7 @@ private fun CodeCard(code: StoredCode, demo: Boolean) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    code.code?.toString() ?: "??",
+                    code.dtc,
                     style = GaugeNumerals.copy(fontSize = 40.sp),
                     color = if (info != null) status.critical else status.warning,
                 )
@@ -188,16 +188,22 @@ private fun CodeCard(code: StoredCode, demo: Boolean) {
                 Column(Modifier.weight(1f)) {
                     if (info != null) {
                         Text(
-                            info.meter,
+                            "${info.meter}  ·  SERVICE CODE ${info.code}",
                             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace, letterSpacing = 2.sp),
                             color = scheme.primary,
                         )
                         Text(info.title, style = MaterialTheme.typography.titleLarge, color = scheme.onSurface)
+                        if (!info.dtcVerified) {
+                            Text(
+                                "Matched by the standard OBD-II meaning of ${code.dtc}; not yet seen from a real ski.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                        }
                     } else {
-                        val label = code.code?.toString() ?: code.rawHex.take(5).replace(" ", "")
-                        Text("Unknown code $label", style = MaterialTheme.typography.titleLarge, color = status.warning)
+                        Text("Unknown code ${code.dtc}", style = MaterialTheme.typography.titleLarge, color = status.warning)
                         Text(
-                            "Not in the Ultra LX service code table.",
+                            "Not in the Ultra LX service code table. Look ${code.dtc} up as a standard OBD-II code.",
                             style = MaterialTheme.typography.bodySmall,
                             color = scheme.onSurfaceVariant,
                         )

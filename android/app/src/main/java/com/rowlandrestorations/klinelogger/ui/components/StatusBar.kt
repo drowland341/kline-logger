@@ -86,9 +86,15 @@ fun LinkIndicator(state: LinkState, modifier: Modifier = Modifier, size: Int = 1
     )
 }
 
-/** Slim bar shown above every screen: link state on the left, CSV Record button on the right. */
+/** Slim bar shown above every screen: link state on the left, Log All and CSV Record buttons on the right. */
 @Composable
-fun StatusBar(connection: ConnectionUi, scan: ScanUi, recording: RecordingUi, onRecord: () -> Unit, modifier: Modifier = Modifier) {
+fun StatusBar(
+    connection: ConnectionUi,
+    scan: ScanUi,
+    recording: RecordingUi,
+    onRecord: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val scheme = MaterialTheme.colorScheme
     Column(modifier.background(scheme.surfaceContainerLowest)) {
         Row(
@@ -124,8 +130,17 @@ fun StatusBar(connection: ConnectionUi, scan: ScanUi, recording: RecordingUi, on
     }
 }
 
+/** REC: the channel CSV plus a traffic file with every bus frame. Shown in the status bar and full screen. */
 @Composable
-private fun RecordButton(recording: RecordingUi, enabled: Boolean, onClick: () -> Unit) {
+fun RecordButton(
+    recording: RecordingUi,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    label: String = "REC",
+    color: Color = GaugeTheme.status.critical,
+    onColor: Color = Color.White,
+    activePrefix: String = "",         // shown before the timer while recording, to tell two buttons apart
+) {
     val status = GaugeTheme.status
     val shape = RoundedCornerShape(12.dp)
     val padding = PaddingValues(horizontal = 14.dp)
@@ -143,11 +158,11 @@ private fun RecordButton(recording: RecordingUi, enabled: Boolean, onClick: () -
             shape = shape,
             contentPadding = padding,
             modifier = Modifier.height(44.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = status.critical, contentColor = Color.White),
+            colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = onColor),
         ) {
-            Box(Modifier.size(10.dp).background(Color.White, RoundedCornerShape(2.dp)))
+            Box(Modifier.size(10.dp).background(onColor, RoundedCornerShape(2.dp)))
             Spacer(Modifier.width(8.dp))
-            Text("%d:%02d".format(secs / 60, secs % 60), style = GaugeNumerals.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize))
+            Text(activePrefix + "%d:%02d".format(secs / 60, secs % 60), style = GaugeNumerals.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize))
         }
     } else {
         OutlinedButton(
@@ -156,12 +171,12 @@ private fun RecordButton(recording: RecordingUi, enabled: Boolean, onClick: () -
             shape = shape,
             contentPadding = padding,
             modifier = Modifier.height(44.dp),
-            border = BorderStroke(1.5.dp, if (enabled) status.critical else MaterialTheme.colorScheme.outline),
+            border = BorderStroke(1.5.dp, if (enabled) color else MaterialTheme.colorScheme.outline),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
         ) {
-            Box(Modifier.size(10.dp).background(if (enabled) status.critical else status.faint, CircleShape))
+            Box(Modifier.size(10.dp).background(if (enabled) color else status.faint, CircleShape))
             Spacer(Modifier.width(8.dp))
-            Text("REC", style = MaterialTheme.typography.labelLarge)
+            Text(label, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

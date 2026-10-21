@@ -59,7 +59,7 @@ class ChannelStore(private val context: Context) {
             "formula variables: A B C D... (data bytes), raw, sraw, n, d. Functions: abs min max round signed(v,bits) math.*",
             "verified: set true once a channel's scaling has been checked against a known-good reading.",
             "gauge_min / gauge_max: range of the tile's gauge bar. null = scale to the values seen this session.",
-            "priority: phone apps only. true re-reads the channel between every other channel read. Ignored by the Windows app.",
+            "priority: phone apps only. true reads the channel on every update, ahead of the rest. Ignored by the Windows app.",
         )
     }
 }

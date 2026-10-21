@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -82,6 +83,7 @@ fun ChannelEditor(
     var formula by rememberSaveable { mutableStateOf(original?.formula?.source ?: "raw") }
     var units by rememberSaveable { mutableStateOf(original?.units ?: "raw") }
     var everyText by rememberSaveable { mutableStateOf((original?.every ?: 1).toString()) }
+    var priority by rememberSaveable { mutableStateOf(original?.priority ?: false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
@@ -173,12 +175,25 @@ fun ChannelEditor(
                     OutlinedTextField(
                         everyText, { everyText = it.filter(Char::isDigit).take(3) }, Modifier.width(120.dp),
                         label = { Text("Read every") }, suffix = { Text("upd") }, singleLine = true,
+                        enabled = !priority,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     )
                 }
                 PresetRow(UNIT_PRESETS.map { it to it }) { units = it }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Fast channel", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Read on every update, ahead of the rest. Keep this to the one or two gauges that move quickest.",
+                            style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(priority, { priority = it })
+                }
                 Text(
-                    "Read every 1 for fast signals (RPM, throttle, voltage swings); 10 or more for slow ones like temperatures.",
+                    "Other channels take turns, one per update. Read every 1 for fast signals like voltage swings; " +
+                        "10 or more for slow ones like temperatures.",
                     style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
                 )
 
@@ -219,7 +234,7 @@ fun ChannelEditor(
                                 notes = original?.notes ?: request.notes,
                                 gaugeMin = original?.gaugeMin,
                                 gaugeMax = original?.gaugeMax,
-                                priority = original?.priority ?: false,
+                                priority = priority,
                             )
                             error = onSave(original?.pid, ch)
                             if (error == null) onDismiss()

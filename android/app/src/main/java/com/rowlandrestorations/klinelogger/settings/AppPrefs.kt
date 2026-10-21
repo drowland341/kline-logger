@@ -12,14 +12,20 @@ enum class AdapterKind(val label: String, val short: String) {
 }
 
 enum class TemperatureUnit(val symbol: String) { FAHRENHEIT("°F"), CELSIUS("°C") }
-enum class PressureUnit(val symbol: String) { KPA("kPa"), INHG("inHg"), PSI("psi") }
+/** PSI is shown like a boost gauge: vacuum in inHg below the atmosphere reading, boost in psi above it. */
+enum class PressureUnit(val symbol: String) { KPA("kPa"), INHG("inHg"), PSI("inHg / psi") }
 enum class SpeedUnit(val symbol: String) { MPH("mph"), KMH("km/h") }
+
+/** How the Dashboard draws its gauges. */
+enum class DashStyle(val label: String) { CLASSIC("Classic"), SPORT("Sport"), LCD("LCD"), DIGITAL("Digital") }
 
 /** Display units, each picked on its own (like the iOS app), e.g. °F and mph but kPa. */
 data class UnitPrefs(
     val temperature: TemperatureUnit = TemperatureUnit.FAHRENHEIT,
     val pressure: PressureUnit = PressureUnit.KPA,
     val speed: SpeedUnit = SpeedUnit.MPH,
+    /** Not saved: the ECU's pressure reading with the engine stopped, for the vacuum/boost display. */
+    val atmosphereKpa: Double = STANDARD_ATMOSPHERE_KPA,
 )
 
 data class AdapterPrefs(
@@ -70,6 +76,19 @@ class AppPrefs(context: Context) {
             .putString("unit_pressure", u.pressure.name)
             .putString("unit_speed", u.speed.name)
             .apply()
+    }
+
+    fun dashStyle(): DashStyle = enumOr(sp.getString("dash_style", null), DashStyle.CLASSIC)
+
+    fun saveDashStyle(s: DashStyle) {
+        sp.edit().putString("dash_style", s.name).apply()
+    }
+
+    /** Mirror the rider's ski picture so it faces the other way. */
+    fun vehicleFlip(): Boolean = sp.getBoolean("vehicle_flip", false)
+
+    fun saveVehicleFlip(flip: Boolean) {
+        sp.edit().putBoolean("vehicle_flip", flip).apply()
     }
 
     private fun device(prefix: String): BtDevice? {
