@@ -49,8 +49,9 @@ it from this file. The user's copy is never written back here.
   one big-endian number), `sraw` (signed), `n` (byte count), `d` (byte list). Functions: `abs min max round
   signed(v, bits) math.*`. All three apps evaluate the same Python-style subset, so keep to it.
 - **units**: write temperatures in `°C`. Each app converts to °F for display, and logs stay in °C.
-- **every**: read on every Nth update (1 = every time). **priority** (phone apps only) re-reads the
-  channel between every other read, for gauges that must track quickly, like RPM.
+- **every**: read on every Nth update (1 = every time). **priority** (phone apps only) reads the
+  channel on every update, ahead of the rest, for gauges that must track quickly, like RPM and throttle.
+  On Android the other channels then take turns, one per update, as their `every` comes round.
 - **verified**: set true once a scaling has been checked against a known-good reading.
 - **gauge_min / gauge_max**: the gauge range. `null` scales the gauge to the values seen.
 

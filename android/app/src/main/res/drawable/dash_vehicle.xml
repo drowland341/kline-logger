@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder side view of a jet ski for the Digital dashboard. Replace it with a photo by deleting this file
+     and adding res/drawable-nodpi/dash_vehicle.png (a transparent background looks best). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="80dp"
+    android:viewportWidth="200"
+    android:viewportHeight="80">
+    <!-- Shadow on the water -->
+    <path
+        android:fillColor="#33000000"
+        android:pathData="M18,70 L186,66 Q170,74 40,75 Z" />
+    <!-- Hull -->
+    <path
+        android:fillColor="#E8ECF0"
+        android:pathData="M8,46 L196,40 Q192,54 170,61 L42,64 Q18,61 8,46 Z" />
+    <!-- Upper deck -->
+    <path
+        android:fillColor="#1F6FE0"
+        android:pathData="M14,46 L50,37 L104,34 L128,24 L160,27 L196,40 Z" />
+    <!-- Accent stripe -->
+    <path
+        android:fillColor="#00D4FF"
+        android:pathData="M26,51 L184,45 L180,49 L30,55 Z" />
+    <!-- Seat -->
+    <path
+        android:fillColor="#15181C"
+        android:pathData="M46,38 Q58,27 98,28 L106,34 L54,40 Z" />
+    <!-- Handlebar post and bars -->
+    <path
+        android:strokeColor="#15181C"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M120,27 L126,15" />
+    <path
+        android:strokeColor="#15181C"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M117,15 L134,13" />
+    <!-- Windshield -->
+    <path
+        android:fillColor="#5A7FA8"
+        android:pathData="M132,24 L150,22 L160,27 Z" />
+</vector>

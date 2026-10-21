@@ -417,7 +417,7 @@ private fun RecordingCard(recording: RecordingUi) {
     val context = LocalContext.current
     SectionCard(content = {
         Column(Modifier.padding(20.dp)) {
-            Text("CSV LOG", style = GaugeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("RECORDING", style = GaugeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -432,6 +432,12 @@ private fun RecordingCard(recording: RecordingUi) {
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = { shareLog(context, log) }) { Text("SHARE") }
                 }
+            }
+            recording.trafficLog?.let {
+                Text(
+                    "Bus traffic (every request and reply): ${it.name}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             recording.folder?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = GaugeTheme.status.faint)

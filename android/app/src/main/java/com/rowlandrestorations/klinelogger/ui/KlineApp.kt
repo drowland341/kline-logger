@@ -1,5 +1,12 @@
 package com.rowlandrestorations.klinelogger.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -41,6 +48,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rowlandrestorations.klinelogger.LinkState
 import com.rowlandrestorations.klinelogger.MainViewModel
@@ -54,6 +64,7 @@ import com.rowlandrestorations.klinelogger.ui.screens.EditorRequest
 import com.rowlandrestorations.klinelogger.ui.screens.ScanScreen
 import com.rowlandrestorations.klinelogger.ui.screens.ConnectionScreen
 import com.rowlandrestorations.klinelogger.ui.screens.DashboardScreen
+import com.rowlandrestorations.klinelogger.ui.screens.VehicleControls
 import com.rowlandrestorations.klinelogger.ui.screens.LiveDataScreen
 import com.rowlandrestorations.klinelogger.ui.theme.GaugeLabel
 import kotlinx.coroutines.delay
@@ -76,21 +87,44 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
     val channels by vm.channels.collectAsState()
     val codes by vm.codes.collectAsState()
     val devices by vm.devices.collectAsState()
-    val units by vm.units.collectAsState()
+    val savedUnits by vm.units.collectAsState()
+    val atmosphere by vm.atmosphere.collectAsState()
+    val units = atmosphere?.let { savedUnits.copy(atmosphereKpa = it) } ?: savedUnits
     val research by vm.research.collectAsState()
     val defaultsOffer by vm.defaultsOffer.collectAsState()
     val logs by vm.logs.collectAsState()
     val gpsMph by vm.gps.mph.collectAsState()
     val gpsStatus by vm.gps.status.collectAsState()
+    val dashStyle by vm.dashStyle.collectAsState()
+    val vehicle by vm.vehicle.collectAsState()
+    val vehicleFlip by vm.vehicleFlip.collectAsState()
+    val pickVehicle = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::importVehicle) }
+    val vehicleControls = VehicleControls(
+        vehicle, vehicleFlip,
+        onPick = { pickVehicle.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+        onFlip = vm::flipVehicle,
+        onClear = vm::clearVehicle,
+    )
     var editor by remember { mutableStateOf<EditorRequest?>(null) }
     var screen by rememberSaveable { mutableStateOf(Screen.DASHBOARD) }
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
 
     KeepScreenOn(connection.state == LinkState.CONNECTED)
+    Immersive(fullscreen)
+    BackHandler(enabled = fullscreen) { fullscreen = false }
     LaunchedEffect(Unit) { if (vm.gps.hasPermission()) vm.startGps() }
 
     CompositionLocalProvider(LocalUnits provides units) {
     Box(Modifier.fillMaxSize()) {
-        Scaffold(
+        if (fullscreen) {
+            // The dashboard alone, edge to edge: no app bars, and the system bars hidden until swiped in.
+            DashboardScreen(
+                channels, readings, connection, banner = {}, gpsMph, dashStyle, vm::setDashStyle,
+                fullscreen = true, onFullscreen = { fullscreen = it },
+                recording = recording, onRecord = vm::toggleRecording,
+                vehicle = vehicleControls,
+            )
+        } else Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = { StatusBar(connection, scan, recording, vm::toggleRecording) },
             bottomBar = {
@@ -118,7 +152,11 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
             }
             Crossfade(screen, Modifier.padding(padding), animationSpec = tween(180), label = "screen") { s ->
                 when (s) {
-                    Screen.DASHBOARD -> DashboardScreen(channels, readings, connection, banner)
+                    Screen.DASHBOARD -> DashboardScreen(
+                        channels, readings, connection, banner, gpsMph, dashStyle, vm::setDashStyle,
+                        onFullscreen = { fullscreen = it },
+                        vehicle = vehicleControls,
+                    )
                     Screen.LIVE_DATA -> LiveDataScreen(
                         channels, readings, connection, banner, gpsMph, gpsStatus,
                         onEnableGps = vm::startGps,
@@ -140,9 +178,10 @@ fun KlineApp(vm: MainViewModel = viewModel()) {
                     )
                     Screen.CODES -> CodesScreen(codes, connection, onRead = vm::readCodes, onClear = vm::clearCodes)
                     Screen.CONNECTION -> ConnectionScreen(
-                        connection, devices, units, recording, logs, vm.logStore.folderLabel,
+                        connection, devices, savedUnits, recording, logs, vm.logStore.folderLabel,
                         writingLogs = setOfNotNull(
                             recording.log?.key?.takeIf { recording.active },
+                            recording.trafficLog?.key?.takeIf { recording.active },
                             research.log?.key?.takeIf { research.active },
                         ),
                         rawLog = rawLog,
@@ -186,6 +225,27 @@ private fun KeepScreenOn(on: Boolean) {
         view.keepScreenOn = on
         onDispose { view.keepScreenOn = false }
     }
+}
+
+/** Hides the status and navigation bars while [on]; a swipe from the edge shows them briefly. */
+@Composable
+private fun Immersive(on: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(on) {
+        val window = view.context.findActivity()?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (on) {
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 /** Branded card that follows the system splash on a cold start, then fades out. */

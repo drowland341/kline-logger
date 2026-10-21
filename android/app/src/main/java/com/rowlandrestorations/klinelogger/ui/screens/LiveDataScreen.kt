@@ -122,7 +122,7 @@ private fun ChannelRow(ch: PidDef, reading: Reading?, onClick: () -> Unit) {
     val units = LocalUnits.current
     val value = reading?.value?.let { units.convert(it, ch.units) }
     val history = reading?.history.orEmpty().map { units.convert(it.toDouble(), ch.units).toFloat() }
-    val shownUnits = units.label(ch.displayUnits)
+    val shownUnits = units.label(ch.displayUnits, value)
     Surface(shape = RoundedCornerShape(16.dp), color = scheme.surfaceContainerHigh) {
         Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
