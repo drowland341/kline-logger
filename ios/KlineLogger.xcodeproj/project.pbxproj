@@ -58,7 +58,7 @@
 			path = KlineLoggerUITests;
 			sourceTree = "<group>";
 		};
-		9188A001308F0000002D1983 /* channels */ = {
+		9188A001308F0000002D1983 /* ../shared/channels */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ../shared/channels;
 			sourceTree = "<group>";
@@ -94,7 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				918886F5307315C800C1CDDD /* KlineLogger */,
-				9188A001308F0000002D1983 /* channels */,
+				9188A001308F0000002D1983 /* ../shared/channels */,
 				91888706307315C900C1CDDD /* KlineLoggerTests */,
 				91888710307315C900C1CDDD /* KlineLoggerUITests */,
 				918886F4307315C800C1CDDD /* Products */,
@@ -128,7 +128,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				918886F5307315C800C1CDDD /* KlineLogger */,
-				9188A001308F0000002D1983 /* channels */,
+				9188A001308F0000002D1983 /* ../shared/channels */,
 			);
 			name = KlineLogger;
 			packageProductDependencies = (

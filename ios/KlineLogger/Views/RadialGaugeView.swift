@@ -64,6 +64,22 @@ struct GaugeColorStop {
         return stops.last?.color ?? .accentColor
     }
 
+    /// Like `color(at:in:)`, but snaps to whichever stop's color most
+    /// recently "started" at or before `progress`, instead of blending
+    /// between it and the next one. Used for gauges where crossing a
+    /// threshold should flip the whole dial to the new zone's color all at
+    /// once, rather than sweeping through a gradient as the needle
+    /// approaches it.
+    static func zoneColor(at progress: Double, in stops: [GaugeColorStop]) -> Color {
+        guard let first = stops.first else { return .accentColor }
+        var current = first.color
+        for stop in stops {
+            guard stop.location <= progress else { break }
+            current = stop.color
+        }
+        return current
+    }
+
     /// Builds a `Gradient` whose stop locations are scaled into the 0...1
     /// space `.conicGradient` expects (a full 360° revolution). It's densely
     /// sampled through the same HSB `color(at:in:)` ramp used elsewhere
@@ -158,6 +174,13 @@ struct RadialGaugeView: View {
     /// instead of "0, 1000, 2000 … 8000".
     var tickLabelScale: Double = 1
     var colorZones: [GaugeColorStop] = GaugeColorStop.standard
+    /// When true, the progress arc is filled with a single solid color per
+    /// zone (see `GaugeColorStop.zoneColor`) that snaps the instant the
+    /// needle crosses into a new zone, instead of sweeping through a
+    /// gradient as it approaches. Matches gauges — like a tach redline —
+    /// where "you are now in the danger zone" should read as an abrupt,
+    /// whole-bar change rather than a creeping highlight.
+    var useZoneColor: Bool = false
 
     private let startAngle: Double = 135
     private let sweep: Double = 270
@@ -169,7 +192,7 @@ struct RadialGaugeView: View {
     }
 
     private var liveColor: Color {
-        GaugeColorStop.color(at: progress, in: colorZones)
+        useZoneColor ? GaugeColorStop.zoneColor(at: progress, in: colorZones) : GaugeColorStop.color(at: progress, in: colorZones)
     }
 
     /// Whether `colorZones` actually varies — if every stop is the same
@@ -178,6 +201,16 @@ struct RadialGaugeView: View {
     private var hasColorRamp: Bool {
         guard let first = colorZones.first?.color else { return false }
         return colorZones.contains { $0.color != first }
+    }
+
+    /// Whether the dial has moved past its base (lowest) zone color — used to
+    /// decide when the center readout should tint along with the arc. Works
+    /// for both modes: in blend mode, `liveColor` only starts to differ from
+    /// the base color once the gradient begins easing toward the next zone;
+    /// in zone mode, it differs the instant a threshold is crossed.
+    private var isPastBaseZone: Bool {
+        guard let first = colorZones.first?.color else { return false }
+        return liveColor != first
     }
 
     var body: some View {
@@ -244,28 +277,45 @@ struct RadialGaugeView: View {
                     var progressPath = Path()
                     progressPath.addArc(center: center, radius: radius, startAngle: .degrees(startAngle), endAngle: .degrees(startAngle + max(progress, 0.0015) * sweep), clockwise: false)
 
-                    context.drawLayer { ctx in
-                        ctx.addFilter(.blur(radius: lineWidth * 0.4))
-                        ctx.stroke(
+                    if useZoneColor {
+                        context.drawLayer { ctx in
+                            ctx.addFilter(.blur(radius: lineWidth * 0.4))
+                            ctx.stroke(
+                                progressPath,
+                                with: .color(liveColor.opacity(0.6)),
+                                style: StrokeStyle(lineWidth: lineWidth * 1.25, lineCap: .round)
+                            )
+                        }
+
+                        context.stroke(
+                            progressPath,
+                            with: .color(liveColor),
+                            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                        )
+                    } else {
+                        context.drawLayer { ctx in
+                            ctx.addFilter(.blur(radius: lineWidth * 0.4))
+                            ctx.stroke(
+                                progressPath,
+                                with: .conicGradient(
+                                    GaugeColorStop.gradient(for: colorZones, sweepFraction: sweep / 360, opacity: 0.6),
+                                    center: center,
+                                    angle: .degrees(startAngle)
+                                ),
+                                style: StrokeStyle(lineWidth: lineWidth * 1.25, lineCap: .round)
+                            )
+                        }
+
+                        context.stroke(
                             progressPath,
                             with: .conicGradient(
-                                GaugeColorStop.gradient(for: colorZones, sweepFraction: sweep / 360, opacity: 0.6),
+                                GaugeColorStop.gradient(for: colorZones, sweepFraction: sweep / 360),
                                 center: center,
                                 angle: .degrees(startAngle)
                             ),
-                            style: StrokeStyle(lineWidth: lineWidth * 1.25, lineCap: .round)
+                            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                         )
                     }
-
-                    context.stroke(
-                        progressPath,
-                        with: .conicGradient(
-                            GaugeColorStop.gradient(for: colorZones, sweepFraction: sweep / 360),
-                            center: center,
-                            angle: .degrees(startAngle)
-                        ),
-                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                    )
 
                     let tipAngle = (startAngle + max(progress, 0.0015) * sweep) * .pi / 180
                     let tip = CGPoint(x: center.x + cos(tipAngle) * radius, y: center.y + sin(tipAngle) * radius)
@@ -285,7 +335,7 @@ struct RadialGaugeView: View {
                     context.draw(
                         Text(valueText)
                             .font(.system(size: valueFontSize, weight: .bold, design: .rounded))
-                            .foregroundStyle(hasColorRamp && progress >= 0.90 ? liveColor : .primary),
+                            .foregroundStyle(hasColorRamp && isPastBaseZone ? liveColor : .primary),
                         at: CGPoint(x: center.x, y: blockTop + valueLineHeight / 2),
                         anchor: .center
                     )
@@ -374,4 +424,28 @@ struct RadialGaugeView: View {
     }
     .padding()
     .rotationEffect(.degrees(90))
+}
+
+private let zoneDemoStops: [GaugeColorStop] = [
+    GaugeColorStop(location: 0, color: .accentColor),
+    GaugeColorStop(location: 0.78, color: .yellow),
+    GaugeColorStop(location: 0.84, color: .red),
+]
+
+#Preview("RPM Zone Mode — Safe") {
+    RadialGaugeView(value: 6000, range: 0...10000, title: "Engine RPM", unit: "RPM", valueText: "6000", tickCount: 16, tickLabelScale: 1000, colorZones: zoneDemoStops, useZoneColor: true)
+        .frame(width: 320, height: 320)
+        .padding()
+}
+
+#Preview("RPM Zone Mode — Yellow") {
+    RadialGaugeView(value: 7900, range: 0...10000, title: "Engine RPM", unit: "RPM", valueText: "7900", tickCount: 16, tickLabelScale: 1000, colorZones: zoneDemoStops, useZoneColor: true)
+        .frame(width: 320, height: 320)
+        .padding()
+}
+
+#Preview("RPM Zone Mode — Red") {
+    RadialGaugeView(value: 8700, range: 0...10000, title: "Engine RPM", unit: "RPM", valueText: "8700", tickCount: 16, tickLabelScale: 1000, colorZones: zoneDemoStops, useZoneColor: true)
+        .frame(width: 320, height: 320)
+        .padding()
 }

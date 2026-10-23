@@ -55,6 +55,27 @@ enum UnitDisplay {
         return (rawValue, unit)
     }
 
+    /// `value` (in `nativeUnit`, a channel's native units like "°C"/"kPa") converted to the user's
+    /// display preference, as a raw `Double` — unlike `convert(value:unit:...)` above, which only
+    /// works on already-formatted strings. Needed so a dashboard gauge's range/thresholds (which are
+    /// `Double`s, not strings) convert consistently with the value drawn inside them.
+    static func convertDouble(_ value: Double, nativeUnit: String, temperature: TemperatureUnit, pressure: PressureUnit) -> Double {
+        if nativeUnit == "°C", temperature == .fahrenheit {
+            return value * 9 / 5 + 32
+        }
+        if nativeUnit == "kPa", pressure == .inHg {
+            return value * kPaToInHg
+        }
+        return value
+    }
+
+    /// The unit label to show next to a value converted by `convertDouble`.
+    static func displayUnit(nativeUnit: String, temperature: TemperatureUnit, pressure: PressureUnit) -> String {
+        if nativeUnit == "°C" { return temperature.symbol }
+        if nativeUnit == "kPa" { return pressure == .inHg ? "inHg" : "kPa" }
+        return nativeUnit
+    }
+
     private static func format(_ value: Double) -> String {
         if value.truncatingRemainder(dividingBy: 1) == 0, abs(value) < 1_000_000 {
             return String(Int(value))

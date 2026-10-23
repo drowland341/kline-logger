@@ -102,9 +102,18 @@ final class ResearchLogger {
         return header.joined(separator: ",")
     }
 
+    /// Quotes a CSV field per RFC 4180 if it contains a character that would otherwise corrupt
+    /// column alignment. Needed now that known-channel cells can hold a fault reason instead of
+    /// just a numeric value — NegativeResponseError's text (e.g. "busy, repeat request") contains
+    /// a literal comma, which would have silently shifted every column after it.
+    private static func csvField(_ s: String) -> String {
+        guard s.contains(",") || s.contains("\"") || s.contains("\n") else { return s }
+        return "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
     private func rowLine(_ row: ResearchLogRow) -> String {
         var fields = [String(format: "%.2f", row.timestamp.timeIntervalSince(sessionStart ?? row.timestamp))]
-        fields.append(contentsOf: row.knownValues)
+        fields.append(contentsOf: row.knownValues.map(Self.csvField))
         fields.append(row.gpsSpeedMPH.map { String(format: "%.1f", $0) } ?? "")
         fields.append(contentsOf: row.extraRawValues.map { entry in
             entry.raw.map { String(format: "%02X", $0) }.joined(separator: " ")
@@ -115,10 +124,17 @@ final class ResearchLogger {
         return fields.joined(separator: ",")
     }
 
+    /// A reading that failed to decode used to log as a blank cell — identical to "not polled
+    /// yet," so a sensor that actually drops out (ECU refusal, timeout, bad formula) mid-ride was
+    /// invisible in the export. Now the fault reason itself lands in the cell, so e.g. a burst of
+    /// "FAULT: ECU refused: busy, repeat request" rows exactly when the ski bogs is visible.
     private func sample(obdEngine: OBDEngine, gpsManager: GPSSpeedManager, extraPIDs: [UInt8]) {
         let readingsByName = Dictionary(uniqueKeysWithValues: obdEngine.pidReadings.map { ($0.name, $0) })
         let known = knownChannelNames.map { name -> String in
-            guard let reading = readingsByName[name], !reading.isFault else { return "" }
+            guard let reading = readingsByName[name] else { return "" }
+            if reading.isFault {
+                return "FAULT: \(reading.faultReason ?? "unknown")"
+            }
             return reading.value
         }
         let extras = extraPIDs.map { pid in (pid: pid, raw: obdEngine.rawValuesByPID[pid] ?? []) }
