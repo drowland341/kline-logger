@@ -18,6 +18,21 @@ All three apps speak the same Kawasaki KWP2000 dialect (see [Protocol notes](#pr
 
 The Android and iOS apps share the gauge icon above. Icon and logo files (512 and 1024 px PNGs) are in [`branding/`](branding/).
 
+## The dashboard
+
+The Android and iOS apps show live ECU data as a full-screen dashboard with four gauge styles, switchable on the fly. Shown here on Android in demo mode (no ski needed):
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/screenshots/android-dash-classic.png" alt="Classic dashboard style"><br><b>Classic</b> — round tachometer with gauge cards</td>
+    <td width="50%" align="center"><img src="docs/screenshots/android-dash-sport.png" alt="Sport dashboard style"><br><b>Sport</b> — twin sweep arcs over a horizon grid</td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/screenshots/android-dash-lcd.png" alt="LCD dashboard style"><br><b>LCD</b> — bar tachometer with a segmented readout</td>
+    <td width="50%" align="center"><img src="docs/screenshots/android-dash-digital.png" alt="Digital dashboard style"><br><b>Digital</b> — twin frames with your own ski</td>
+  </tr>
+</table>
+
 The rest of this page covers the Windows app, plus the formula, protocol and troubleshooting notes that apply to all three.
 
 ## Install (Windows)
